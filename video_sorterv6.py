@@ -1,3 +1,4 @@
+retry_files = []
 import csv
 import os
 import shutil
@@ -53,7 +54,7 @@ def read_courses(csv_path):
             start_time = datetime.strptime(start_time_str, '%I:%M%p' if ':' in start_time_str else '%I%p').time().strftime('%H:%M')
         else:
             logging.warning(f"Invalid start time found for course {row['Course']}. Skipping.")
-            continue  # Skip this row if no start time found
+
 
         # Extract and store the section number
         section_number = int(row['Section #']) if pd.notna(row['Section #']) else None
@@ -77,13 +78,11 @@ def find_course_by_number_and_section(course_number, section_number):
 
     # Iterate through the courses list and look for a match
     for course in courses:
-        print(f"Comparing with course: {course['course_number']}, section: {course['section_number']}")  # Debugging line
+         
 
         if course['course_number'] == course_number and course['section_number'] == int(section_number):
-            print("Match found!")  # Debugging line
             return course
 
-    print("No match found.")  # Debugging line
     # Return None if no match is found
     return None
 
@@ -145,7 +144,7 @@ def determine_course(room_number, date, time):
         course_datetime = file_datetime.replace(hour=course_time.hour, minute=course_time.minute, second=0)
 
         # Check if the file's datetime is within a tolerance window around the course start time
-        tolerance = timedelta(minutes=15) # You can adjust this value
+        tolerance = timedelta(minutes=30) # You can adjust this value
         if abs(file_datetime - course_datetime) <= tolerance:
             # Check if the day of the week matches
             if file_datetime.strftime('%A') in course['days']: # Assuming days in CSV are full names like 'Monday'
@@ -209,35 +208,47 @@ def move_video(src_path, dest_folder, course, date):  # Added date as a paramete
         print(f"An error occurred while moving file: {e}")
 
 
-def is_file_downloaded(filepath, interval=5, retries=3):
-    """
-    Check if a file has been completely downloaded.
+# def is_file_downloaded(filepath, interval=5, retries=3):
+#     """
+#     Check if a file has been completely downloaded.
     
-    :param filepath: The path to the file.
-    :param interval: The time interval to wait before checking the file size again.
-    :param retries: The number of retries to check if the file has been downloaded.
-    :return: True if the file has been downloaded, False otherwise.
-    """
-    last_size = -1
-    retries_left = retries
+#     :param filepath: The path to the file.
+#     :param interval: The time interval to wait before checking the file size again.
+#     :param retries: The number of retries to check if the file has been downloaded.
+#     :return: True if the file has been downloaded, False otherwise.
+#     """
+#     last_size = -1
+#     retries_left = retries
     
-    while retries_left > 0:
-        if not os.path.exists(filepath):
-            time.sleep(1)  # Wait for 1 second if the file does not exist
-            continue
+#     while retries_left > 0:
+#         if not os.path.exists(filepath):
+#             time.sleep(1)  # Wait for 1 second if the file does not exist
+#             continue
 
-        current_size = os.path.getsize(filepath)
+#         current_size = os.path.getsize(filepath)
         
-        if current_size == last_size and current_size > 0:
-            return True
+#         if current_size == last_size and current_size > 0:
+#             return True
         
-        last_size = current_size
-        time.sleep(interval)
-        retries_left -= 1
+#         last_size = current_size
+#         time.sleep(interval)
+#         retries_left -= 1
 
-    return False
+#     return False
 
 
+def is_file_downloaded(file_path):
+    try:
+        # Attempt to read the last byte of the file
+        with open(file_path, 'rb') as f:
+            f.seek(-1, os.SEEK_END)
+            f.read(1)
+        logging.info(f"Successfully read the last byte of {file_path}, assuming it's downloaded.")
+        return True
+    except Exception as e:
+        logging.warning(f"An exception occurred while trying to read {file_path}: {e}. Assuming it's still downloading.")
+        return False
+    
 class VideoHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory or not event.src_path.endswith('.mp4'):
@@ -246,6 +257,7 @@ class VideoHandler(FileSystemEventHandler):
         # Wait until the file has finished downloading
         if not is_file_downloaded(event.src_path):
             logging.warning(f"File {event.src_path} is not completely downloaded. Skipping.")
+            retry_files.append(event.src_path)
             return
 
         # Accessing the global courses variable directly
@@ -274,6 +286,7 @@ def process_existing_files():
             # Wait until the file has finished downloading
             if not is_file_downloaded(file_path):
                 logging.warning(f"File {file_path} is not completely downloaded. Skipping.")
+                retry_files.append(file_path)
                 continue
 
             room_number, date, time, course_number_full, section_number = parse_filename(os.path.basename(file_path))
@@ -301,6 +314,36 @@ def move_unmatched_video(src_path, dest_folder):
     except Exception as e:
         print(f"An error occurred while moving file: {e}")
 
+def retry_skipped_files():
+ 
+    global retry_files  # Accessing the global retry_files list
+    new_retry_files = []
+    for file_path in retry_files:
+        # Attempt to sort the file
+        if not is_file_downloaded(file_path):
+            logging.warning(f"Retrying: File {file_path} is still not completely downloaded. Will retry.")
+            new_retry_files.append(file_path)
+            continue
+        
+        room_number, date, time, course_number_full, section_number = parse_filename(os.path.basename(file_path))
+        if room_number is None and date is None and time is None:
+            logging.warning(f"Filename pattern didn't match for {file_path}. Moving to Unmatched_Videos.")
+            unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
+            os.makedirs(unmatched_folder, exist_ok=True)
+            move_unmatched_video(file_path, unmatched_folder)
+        else:
+            # If time is None, use find_course_by_number_and_section to find the course
+            course = find_course_by_number_and_section(course_number_full, section_number) if time is None else determine_course(room_number, date, time)
+            if course:
+                dest_folder = create_folder(course, DESTINATION_FOLDER, date, time) # Modified to include date and time
+                move_video(file_path, dest_folder, course, date)
+            else:
+                unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
+                os.makedirs(unmatched_folder, exist_ok=True)
+                move_unmatched_video(file_path, unmatched_folder)
+                logging.info(f"No course matched for {file_path}. Moved to {unmatched_folder}")
+    # Update retry_files list
+    retry_files = new_retry_files
 
 def watch_folder(folder_path):
     process_existing_files()
@@ -309,7 +352,8 @@ def watch_folder(folder_path):
     observer.start()
     try:
         while True:
-            time.sleep(1)
+            time.sleep(60)
+            retry_skipped_files()  
     except KeyboardInterrupt:
         observer.stop()
     observer.join()
@@ -326,3 +370,6 @@ courses = read_courses(EXCEL_FILE_PATH)
 
 watch_folder(WATCH_FOLDER)
 process_existing_files()
+
+
+
