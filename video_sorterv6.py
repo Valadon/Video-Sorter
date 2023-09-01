@@ -1,27 +1,32 @@
-retry_files = []
-import csv
+
 import os
-import shutil
 import re
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-from datetime import datetime, timedelta
 import time
-import pandas as pd
 import logging
+import shutil
+import pandas as pd
+from datetime import datetime, timedelta
 import configparser
 
+# Reading paths from config.ini
 config = configparser.ConfigParser()
 config.read('config.ini')
+WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
+DESTINATION_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
+EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
+WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
 
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
 
+# Global list to store course details
+courses = []
+
+# Read course details from the Excel sheet into the global 'courses' list
 def read_courses(csv_path):
-    courses = []
+    global courses
     df = pd.read_excel(csv_path)
-
-    # Drop rows that contain all NaN values
     df = df.dropna(how='all')
-
     for index, row in df.iterrows():
         instructor = str(row['Instructor LAST']).replace(' & ', ' ') if pd.notna(row['Instructor LAST']) else ''
         days_pattern = re.findall(r'M|TTh|T|W|F|Sa', str(row['Meeting Pattern']))
@@ -71,7 +76,8 @@ def read_courses(csv_path):
         
     return courses
 
-
+# Existing helper functions
+# ... (existing helper functions like parse_filename, create_folder, move_video, etc.)
 
 def find_course_by_number_and_section(course_number, section_number):
     print(f"Searching for course: {course_number}, section: {section_number}")  # Debugging line
@@ -207,105 +213,6 @@ def move_video(src_path, dest_folder, course, date):  # Added date as a paramete
     except Exception as e:
         print(f"An error occurred while moving file: {e}")
 
-
-# def is_file_downloaded(filepath, interval=5, retries=3):
-#     """
-#     Check if a file has been completely downloaded.
-    
-#     :param filepath: The path to the file.
-#     :param interval: The time interval to wait before checking the file size again.
-#     :param retries: The number of retries to check if the file has been downloaded.
-#     :return: True if the file has been downloaded, False otherwise.
-#     """
-#     last_size = -1
-#     retries_left = retries
-    
-#     while retries_left > 0:
-#         if not os.path.exists(filepath):
-#             time.sleep(1)  # Wait for 1 second if the file does not exist
-#             continue
-
-#         current_size = os.path.getsize(filepath)
-        
-#         if current_size == last_size and current_size > 0:
-#             return True
-        
-#         last_size = current_size
-#         time.sleep(interval)
-#         retries_left -= 1
-
-#     return False
-
-
-def is_file_downloaded(file_path):
-    try:
-        # Attempt to read the last byte of the file
-        with open(file_path, 'rb') as f:
-            f.seek(-1, os.SEEK_END)
-            f.read(1)
-        logging.info(f"Successfully read the last byte of {file_path}, assuming it's downloaded.")
-        return True
-    except Exception as e:
-        logging.warning(f"An exception occurred while trying to read {file_path}: {e}. Assuming it's still downloading.")
-        return False
-    
-class VideoHandler(FileSystemEventHandler):
-    def on_created(self, event):
-        if event.is_directory or not event.src_path.endswith('.mp4'):
-            return
-
-        # Wait until the file has finished downloading
-        if not is_file_downloaded(event.src_path):
-            logging.warning(f"File {event.src_path} is not completely downloaded. Skipping.")
-            retry_files.append(event.src_path)
-            return
-
-        # Accessing the global courses variable directly
-        room_number, date, time, course_number_full, section_number = parse_filename(os.path.basename(event.src_path))
-        if room_number is None and date is None and time is None:
-            logging.warning(f"Filename pattern didn't match for {event.src_path}. Moving to Unmatched_Videos.")
-            unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
-            os.makedirs(unmatched_folder, exist_ok=True)
-            move_unmatched_video(event.src_path, unmatched_folder)
-        else:
-            # If time is None, use find_course_by_number_and_section to find the course
-            course = find_course_by_number_and_section(course_number_full, section_number) if time is None else determine_course(room_number, date, time)
-            if course:
-                dest_folder = create_folder(course, DESTINATION_FOLDER, date, time) # Modified to include date and time
-                move_video(event.src_path, dest_folder, course, date)
-            else:
-                unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
-                os.makedirs(unmatched_folder, exist_ok=True)
-                move_unmatched_video(event.src_path, unmatched_folder)
-                logging.info(f"No course matched for {event.src_path}. Moved to {unmatched_folder}")
-
-def process_existing_files():
-    for filename in os.listdir(WATCH_FOLDER):
-        if filename.endswith('.mp4'):
-            file_path = os.path.join(WATCH_FOLDER, filename)
-            # Wait until the file has finished downloading
-            if not is_file_downloaded(file_path):
-                logging.warning(f"File {file_path} is not completely downloaded. Skipping.")
-                retry_files.append(file_path)
-                continue
-
-            room_number, date, time, course_number_full, section_number = parse_filename(os.path.basename(file_path))
-            if room_number is None and date is None and time is None:
-                unmatched_folder = os.path.join(WATCH_FOLDER, 'Unmatched_Videos')
-                os.makedirs(unmatched_folder, exist_ok=True)
-                move_unmatched_video(file_path, unmatched_folder)
-            else:
-                course = find_course_by_number_and_section(course_number_full, section_number) if time is None else determine_course(room_number, date, time)
-                if course:
-                    dest_folder = create_folder(course, DESTINATION_FOLDER, date, time)
-                    move_video(file_path, dest_folder, course, date)
-                else:
-                    unmatched_folder = os.path.join(WATCH_FOLDER, 'Unmatched_Videos')
-                    os.makedirs(unmatched_folder, exist_ok=True)
-                    move_unmatched_video(file_path, unmatched_folder)
-                    logging.info(f"No course matched for {file_path}. Moved to {unmatched_folder}")
-
-
 def move_unmatched_video(src_path, dest_folder):
     dest_path = os.path.join(dest_folder, os.path.basename(src_path))
     try:
@@ -314,62 +221,38 @@ def move_unmatched_video(src_path, dest_folder):
     except Exception as e:
         print(f"An error occurred while moving file: {e}")
 
-def retry_skipped_files():
- 
-    global retry_files  # Accessing the global retry_files list
-    new_retry_files = []
-    for file_path in retry_files:
-        # Attempt to sort the file
-        if not is_file_downloaded(file_path):
-            logging.warning(f"Retrying: File {file_path} is still not completely downloaded. Will retry.")
-            new_retry_files.append(file_path)
-            continue
-        
-        room_number, date, time, course_number_full, section_number = parse_filename(os.path.basename(file_path))
-        if room_number is None and date is None and time is None:
-            logging.warning(f"Filename pattern didn't match for {file_path}. Moving to Unmatched_Videos.")
-            unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
-            os.makedirs(unmatched_folder, exist_ok=True)
-            move_unmatched_video(file_path, unmatched_folder)
-        else:
-            # If time is None, use find_course_by_number_and_section to find the course
-            course = find_course_by_number_and_section(course_number_full, section_number) if time is None else determine_course(room_number, date, time)
-            if course:
-                dest_folder = create_folder(course, DESTINATION_FOLDER, date, time) # Modified to include date and time
-                move_video(file_path, dest_folder, course, date)
-            else:
+def process_existing_files():
+    for filename in os.listdir(WATCH_FOLDER):
+        if filename.endswith('.mp4'):
+            file_path = os.path.join(WATCH_FOLDER, filename)
+            
+            room_number, date, time, course_number_full, section_number = parse_filename(os.path.basename(file_path))
+            if room_number is None and date is None and time is None:
                 unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
                 os.makedirs(unmatched_folder, exist_ok=True)
                 move_unmatched_video(file_path, unmatched_folder)
-                logging.info(f"No course matched for {file_path}. Moved to {unmatched_folder}")
-    # Update retry_files list
-    retry_files = new_retry_files
+            else:
+                course = find_course_by_number_and_section(course_number_full, section_number) if time is None else determine_course(room_number, date, time)
+                if course:
+                    dest_folder = create_folder(course, DESTINATION_FOLDER, date, time)
+                    move_video(file_path, dest_folder, course, date)
+                else:
+                    unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
+                    os.makedirs(unmatched_folder, exist_ok=True)
+                    move_unmatched_video(file_path, unmatched_folder)
+                    logging.info(f"No course matched for {file_path}. Moved to {unmatched_folder}")
 
-def watch_folder(folder_path):
+if __name__ == "__main__":
+    read_courses(EXCEL_FILE_PATH)
+    
+    # Process existing files immediately upon script start
     process_existing_files()
-    observer = Observer()
-    observer.schedule(VideoHandler(), folder_path, recursive=False)
-    observer.start()
-    try:
-        while True:
-            time.sleep(60)
-            retry_skipped_files()  
-    except KeyboardInterrupt:
-        observer.stop()
-    observer.join()
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-
-WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
-DESTINATION_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
-EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
-WATCH_FOLDER = os.path.abspath(WATCH_FOLDER) # Use absolute path
-
-courses = read_courses(EXCEL_FILE_PATH)
-
-watch_folder(WATCH_FOLDER)
-process_existing_files()
-
-
-
+    
+    while True:
+        current_time = datetime.now().time()
+        if current_time.hour == 3:
+            logging.info("It's around 3 AM, time to sort the videos.")
+            process_existing_files()
+            time.sleep(3600)  # Sleep for 1 hour
+        else:
+            time.sleep(60)  # Sleep for 1 minute
