@@ -98,7 +98,7 @@ def parse_filename(filename):
     global courses  # Accessing the global courses variable
 
     # Existing filename patterns
-    existing_pattern1 = r'(\d+)_Rec\d+_(\d{8})-\d_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
+    existing_pattern1 = r'(\d+)_Rec\d+_.*?_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
     existing_pattern2 = r'SMP-2100_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
     
     # Matching existing patterns
@@ -106,7 +106,7 @@ def parse_filename(filename):
     match_existing2 = re.match(existing_pattern2, filename)
     
     if match_existing1:
-        room_number, _, date, time = match_existing1.groups()
+        room_number, date, time = match_existing1.groups()
         return room_number, date, time, None, None  # Additional None values for course_number and section_number
     if match_existing2:
         date, time = match_existing2.groups()
@@ -227,6 +227,7 @@ def process_existing_files():
             file_path = os.path.join(WATCH_FOLDER, filename)
             
             room_number, date, time, course_number_full, section_number = parse_filename(os.path.basename(file_path))
+            print(f"room_number: {room_number}, date: {date}, time: {time}, course_number_full: {course_number_full}, section_number: {section_number}")
             if room_number is None and date is None and time is None:
                 unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
                 os.makedirs(unmatched_folder, exist_ok=True)
