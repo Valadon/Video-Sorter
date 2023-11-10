@@ -5,25 +5,49 @@ import time
 import logging
 import shutil
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date, time
 import configparser
 
 # Reading paths from config.ini
 config = configparser.ConfigParser()
 config.read('config.ini')
+
 WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
 DESTINATION_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
 EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
 WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
 
 # Initialize logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename='log.txt', level=logging.INFO)
 
 # Global list to store course details
 courses = []
 
+class Course:
+    def __init__(self, number, section, name, professor, room_number, days, start_time):
+        self.number = number
+        self.section_number = section
+        self.name = name
+        self.professor = professor
+        self.room_number = room_number
+        self.days = days
+        self.start_time = start_time
+
+
+    
+class Recording:
+    def __init__(self, filename: str, date: date, time: time, room_number: str, rec_device:str, course_number: str=None, section_number: str=None):
+        self.filename = filename,
+        self.date = date
+        self.time = time
+        self.room_number = room_number
+        self.rec_device = rec_device
+        
+    def wasScheduled (self):
+        return not ((self.room_number is None) and (self.date is None) and (self.time))
+    
 # Read course details from the Excel sheet into the global 'courses' list
-def read_courses(csv_path):
+def read_courses(csv_path) -> list(Course):
     global courses
     df = pd.read_excel(csv_path)
     df = df.dropna(how='all')
@@ -64,29 +88,29 @@ def read_courses(csv_path):
         # Extract and store the section number
         section_number = int(row['Section #']) if pd.notna(row['Section #']) else None
 
-        courses.append({
-            'course_number': row['Course'],
-            'section_number': section_number,
-            'course_name': row['Course Title'],
-            'professor_name': instructor,
-            'room_number': str(row['Room (cleaned)']),
-            'days': days,
-            'start_time': start_time
-        })
+        course = Course(
+            row['Course'],
+            section_number,
+            row['Course Title'],
+            instructor,
+            str(row['Room (cleaned)']),
+            days,
+            start_time
+        )
+
+        courses.append(course)
         
     return courses
 
 # Existing helper functions
 # ... (existing helper functions like parse_filename, create_folder, move_video, etc.)
 
-def find_course_by_number_and_section(course_number, section_number):
-    print(f"Searching for course: {course_number}, section: {section_number}")  # Debugging line
+def find_course_by_number_and_section(course_number, section_number) -> Course:
+    logging.info(f"Searching for course: {course_number}, section: {section_number}")  # Debugging line
 
     # Iterate through the courses list and look for a match
     for course in courses:
-         
-
-        if course['course_number'] == course_number and course['section_number'] == int(section_number):
+        if course['course_number'] == course_number and course['section_number'] == section_number:
             return course
 
     # Return None if no match is found
@@ -94,55 +118,53 @@ def find_course_by_number_and_section(course_number, section_number):
 
 
 
-def parse_filename(filename):
+def parse_filename(filename) -> Recording:
     global courses  # Accessing the global courses variable
 
     # Existing filename patterns
-    existing_pattern1 = r'(\d+)_Rec\d+_.*?_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
-    existing_pattern2 = r'SMP-2100_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
+    extron_pattern = r'(\d+)_Rec\d+_.*?_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
+    extron_2100_pattern = r'SMP-2100_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
+    capturecast_pattern = r'(\w+)-(\d+)-(\d+)---(\d{1,2})-(\d{1,2})-(\d{4}).mp4'
     
     # Matching existing patterns
-    match_existing1 = re.match(existing_pattern1, filename)
-    match_existing2 = re.match(existing_pattern2, filename)
+    match_extron = re.match(extron_pattern, filename)
+    match_extron_2100 = re.match(extron_2100_pattern, filename)
+    match_capturecast = re.match(capturecast_pattern, filename)
     
-    if match_existing1:
-        room_number, date, time = match_existing1.groups()
-        return room_number, date, time, None, None  # Additional None values for course_number and section_number
-    if match_existing2:
-        date, time = match_existing2.groups()
+    if match_extron:
+        room_number, date, time = match_extron.groups()
+        dt = datetime.strptime(f'{date}{time}', '%Y%m%d%H%M%S')
+        rec = Recording(filename, dt.date(), dt.time(), room_number, 'extron')
+        return rec  # Additional None values for course_number and section_number
+    if match_extron_2100:
+        date, time = match_extron_2100.groups()
         room_number = '2100'
-        return room_number, date, time, None, None  # Additional None values for course_number and section_number
-
-    # New filename pattern
-    new_pattern = r'(\w+)-(\d+)-(\d+)---(\d{1,2})-(\d{1,2})-(\d{4}).mp4'
-    match_new = re.match(new_pattern, filename)
-
-    if match_new:
-        course_code, course_number, section_number, month, day, year = match_new.groups()
-        section_number = int(section_number)  # Convert to integer
+        dt = datetime.strptime(f'{date}{time}', '%Y%m%d%H%M%S')
+        rec = Recording(filename, dt.date(), dt.time(), room_number, 'extron_2100')
+        return rec  # Additional None values for course_number and section_number
+    if match_capturecast:
+        course_code, course_number, section_number, month, day, year = match_capturecast.groups()
         date = f"{year}{month.zfill(2)}{day.zfill(2)}"
-        course_number_full = course_code + ' ' + course_number  # Combine course_code and course_number
+        dt = datetime.strptime(f'{date}{time}', '%Y%m%d%H%M%S')
+        rec = Recording(filename, dt.date(), dt.time(), None, 'capturecast')
+        return rec
+        # TODO: DETERMINE IF THIS IS ACTUALLY NECESSARY
+        # course_number_full = course_code + ' ' + course_number  # Combine course_code and course_number
 
-        matching_course = find_course_by_number_and_section(course_number_full, section_number)
-        if matching_course:
-            room_number = matching_course['room_number']
-            return room_number, date, None, course_number_full, section_number  # Additional values for course_number and section_number
+        # matching_course = find_course_by_number_and_section(course_number_full, section_number)
+        # if matching_course:
+        #     room_number = matching_course['room_number']
+        #     return room_number, date, None, course_number_full, section_number  # Additional values for course_number and section_number
 
-    return None, None, None, None, None  # Default return
+    return None  # Default return
 
 
 
-def determine_course(room_number, date, time):
-    # Check if time is None and handle accordingly
-    if time is None:
-        file_datetime = datetime.strptime(date, '%Y%m%d')
-    else:
-        file_datetime = datetime.strptime(date + time, '%Y%m%d%H%M%S')
-
+def find_course_by_room_and_time(rec: Recording):
     # Iterate through the courses and look for a match
     for course in courses:
         # Check for room match
-        if course['room_number'] != room_number:
+        if course['room_number'] != rec.room_number:
             continue
 
         # Convert course start time into a datetime object on the correct date
@@ -188,9 +210,9 @@ def create_folder(course, base_path, date, time):
     folder_path = os.path.abspath(folder_path)  # Use absolute path
     try:
         os.makedirs(folder_path, exist_ok=True)
-        print(f"Folder created at {folder_path}")
+        logging.info(f"Folder created at {folder_path}")
     except Exception as e:
-        print(f"An error occurred while creating directory: {e}")
+        logging.error(f"An error occurred while creating directory: {e}")
     return folder_path
 
 def move_video(src_path, dest_folder, course, date):  # Added date as a parameter
@@ -209,39 +231,44 @@ def move_video(src_path, dest_folder, course, date):  # Added date as a paramete
 
     try:
         shutil.move(src_path, dest_path)
-        print(f"Video moved from {src_path} to {dest_path}")
+        logging.info(f"Video moved from {src_path} to {dest_path}")
     except Exception as e:
-        print(f"An error occurred while moving file: {e}")
+        logging.error(f"An error occurred while moving file: {e}")
 
 def move_unmatched_video(src_path, dest_folder):
     dest_path = os.path.join(dest_folder, os.path.basename(src_path))
     try:
         shutil.move(src_path, dest_path)
-        print(f"Video moved from {src_path} to {dest_path}")
+        logging.info(f"Video moved from {src_path} to {dest_path}")
     except Exception as e:
-        print(f"An error occurred while moving file: {e}")
+        logging.info(f"An error occurred while moving file: {e}")
 
 def process_existing_files():
     for filename in os.listdir(WATCH_FOLDER):
-        if filename.endswith('.mp4'):
-            file_path = os.path.join(WATCH_FOLDER, filename)
-            
-            room_number, date, time, course_number_full, section_number = parse_filename(os.path.basename(file_path))
-            print(f"room_number: {room_number}, date: {date}, time: {time}, course_number_full: {course_number_full}, section_number: {section_number}")
-            if room_number is None and date is None and time is None:
+
+        if not filename.endswith('.mp4'):
+            continue
+
+        file_path = os.path.join(WATCH_FOLDER, filename)
+        room_number, date, time, course_number_full, section_number = parse_filename(os.path.basename(file_path))
+
+        logging.info(f"room_number: {room_number}, date: {date}, time: {time}, course_number_full: {course_number_full}, section_number: {section_number}")
+
+        if course.wasScheduled():
+            course = find_course_by_room_and_time(room_number, date, time)
+            if course:
+                dest_folder = create_folder(course, DESTINATION_FOLDER, date, time)
+                move_video(file_path, dest_folder, course, date)
+            else:
                 unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
                 os.makedirs(unmatched_folder, exist_ok=True)
                 move_unmatched_video(file_path, unmatched_folder)
-            else:
-                course = find_course_by_number_and_section(course_number_full, section_number) if time is None else determine_course(room_number, date, time)
-                if course:
-                    dest_folder = create_folder(course, DESTINATION_FOLDER, date, time)
-                    move_video(file_path, dest_folder, course, date)
-                else:
-                    unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
-                    os.makedirs(unmatched_folder, exist_ok=True)
-                    move_unmatched_video(file_path, unmatched_folder)
-                    logging.info(f"No course matched for {file_path}. Moved to {unmatched_folder}")
+                logging.info(f"No course matched for {file_path}. Moved to {unmatched_folder}")
+        else:
+            unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
+            os.makedirs(unmatched_folder, exist_ok=True)
+            move_unmatched_video(file_path, unmatched_folder)
+            
 
 if __name__ == "__main__":
     read_courses(EXCEL_FILE_PATH)
