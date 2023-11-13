@@ -17,14 +17,13 @@ DESTINATION_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
 EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
 WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
 
+RECORDING_START_TOLERANCE = timedelta(minutes=30)
+
 # Initialize logging
 logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename='log.txt', level=logging.INFO)
 
-# Global list to store course details
-courses = []
-
 class Course:
-    def __init__(self, number, section, name, professor, room_number, days, start_time):
+    def __init__(self, number: str, section: str, name: str, professor: str, room_number: str, days: set[str], start_time: time):
         self.number = number
         self.section_number = section
         self.name = name
@@ -36,39 +35,46 @@ class Course:
 
     
 class Recording:
-    def __init__(self, filename: str, date: date, time: time, room_number: str, rec_device:str, course_number: str=None, section_number: str=None):
-        self.filename = filename,
+    def __init__(self, file_path: str, date: date, time: time, room_number: str, rec_device:str, course_number: str=None, section_number: str=None, course_code: str=None):
+        self.file_path = file_path,
+        self.filename = os.path.basename(file_path)
         self.date = date
         self.time = time
         self.room_number = room_number
         self.rec_device = rec_device
+        self.course_number = course_number
+        self.section_number = section_number
+        self.course_code = course_code
+
+    def get_datetime(self):
+        return datetime(self.date.year, self.date.month, self.date.day, self.time.hour, self.time.minute, 0, 0)
         
     def wasScheduled (self):
         return not ((self.room_number is None) and (self.date is None) and (self.time))
     
 # Read course details from the Excel sheet into the global 'courses' list
 def read_courses(csv_path) -> list(Course):
-    global courses
+    courses: list[Course] = []
     df = pd.read_excel(csv_path)
     df = df.dropna(how='all')
     for index, row in df.iterrows():
         instructor = str(row['Instructor LAST']).replace(' & ', ' ') if pd.notna(row['Instructor LAST']) else ''
         days_pattern = re.findall(r'M|TTh|T|W|F|Sa', str(row['Meeting Pattern']))
-        days = []  # Define the days list here
+        days = set()  # Define the days list here
         for day_pattern in days_pattern:
             if day_pattern == 'M':
-                days.append('Monday')
+                days.add('Monday')
             elif day_pattern == 'TTh':
-                days.append('Tuesday')
-                days.append('Thursday')
+                days.add('Tuesday')
+                days.add('Thursday')
             elif day_pattern == 'T':
-                days.append('Tuesday')
+                days.add('Tuesday')
             elif day_pattern == 'W':
-                days.append('Wednesday')
+                days.add('Wednesday')
             elif day_pattern == 'F':
-                days.append('Friday')
+                days.add('Friday')
             elif day_pattern == 'Sa':
-                days.append('Saturday')
+                days.add('Saturday')
 
         start_time = None
 
@@ -80,7 +86,7 @@ def read_courses(csv_path) -> list(Course):
         if start_time_str:
             start_time_str = start_time_str.group()
             start_time_str = start_time_str.replace('am', 'AM').replace('pm', 'PM')
-            start_time = datetime.strptime(start_time_str, '%I:%M%p' if ':' in start_time_str else '%I%p').time().strftime('%H:%M')
+            start_time = datetime.strptime(start_time_str, '%I:%M%p' if ':' in start_time_str else '%I%p').time()
         else:
             logging.warning(f"Invalid start time found for course {row['Course']}. Skipping.")
 
@@ -102,24 +108,19 @@ def read_courses(csv_path) -> list(Course):
         
     return courses
 
-# Existing helper functions
-# ... (existing helper functions like parse_filename, create_folder, move_video, etc.)
-
-def find_course_by_number_and_section(course_number, section_number) -> Course:
-    logging.info(f"Searching for course: {course_number}, section: {section_number}")  # Debugging line
+def find_course_by_number_and_section(courses: list[Course], rec: Recording) -> Course:
+    logging.debug(f"Searching for course: {rec.course_number}, section: {rec.course_number}")
 
     # Iterate through the courses list and look for a match
     for course in courses:
-        if course['course_number'] == course_number and course['section_number'] == section_number:
+        if course.number == rec.course_number and course.section_number == rec.section_number:
             return course
 
     # Return None if no match is found
     return None
 
-
-
-def parse_filename(filename) -> Recording:
-    global courses  # Accessing the global courses variable
+def parse_recording_file(file_path: str) -> Recording:
+    filename = os.path.basename(file_path)
 
     # Existing filename patterns
     extron_pattern = r'(\d+)_Rec\d+_.*?_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
@@ -134,19 +135,19 @@ def parse_filename(filename) -> Recording:
     if match_extron:
         room_number, date, time = match_extron.groups()
         dt = datetime.strptime(f'{date}{time}', '%Y%m%d%H%M%S')
-        rec = Recording(filename, dt.date(), dt.time(), room_number, 'extron')
-        return rec  # Additional None values for course_number and section_number
+        rec = Recording(file_path, dt.date(), dt.time(), room_number, 'extron')
+        return rec
     if match_extron_2100:
         date, time = match_extron_2100.groups()
         room_number = '2100'
         dt = datetime.strptime(f'{date}{time}', '%Y%m%d%H%M%S')
-        rec = Recording(filename, dt.date(), dt.time(), room_number, 'extron_2100')
-        return rec  # Additional None values for course_number and section_number
+        rec = Recording(file_path, dt.date(), dt.time(), room_number, 'extron_2100')
+        return rec
     if match_capturecast:
         course_code, course_number, section_number, month, day, year = match_capturecast.groups()
         date = f"{year}{month.zfill(2)}{day.zfill(2)}"
         dt = datetime.strptime(f'{date}{time}', '%Y%m%d%H%M%S')
-        rec = Recording(filename, dt.date(), dt.time(), None, 'capturecast')
+        rec = Recording(file_path, dt.date(), dt.time(), None, 'capturecast', course_number, section_number, course_code)
         return rec
         # TODO: DETERMINE IF THIS IS ACTUALLY NECESSARY
         # course_number_full = course_code + ' ' + course_number  # Combine course_code and course_number
@@ -160,25 +161,29 @@ def parse_filename(filename) -> Recording:
 
 
 
-def find_course_by_room_and_time(rec: Recording):
+def find_course_by_room_and_datetime(courses: list[Course], rec: Recording) -> Course:
     # Iterate through the courses and look for a match
     for course in courses:
         # Check for room match
-        if course['room_number'] != rec.room_number:
+        if course.room_number != rec.room_number:
+            continue
+            
+        if rec.time is None:
             continue
 
-        # Convert course start time into a datetime object on the correct date
-        course_time = datetime.strptime(course['start_time'], '%H:%M') # Assuming time in CSV is in HH:MM format
-        course_datetime = file_datetime.replace(hour=course_time.hour, minute=course_time.minute, second=0)
+        weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        recording_weekday = rec.date.weekday()
+
+        if weekdays[recording_weekday] not in course.days:
+            continue
 
         # Check if the file's datetime is within a tolerance window around the course start time
-        tolerance = timedelta(minutes=30) # You can adjust this value
-        if abs(file_datetime - course_datetime) <= tolerance:
-            # Check if the day of the week matches
-            if file_datetime.strftime('%A') in course['days']: # Assuming days in CSV are full names like 'Monday'
-                return course
+        tolerance = RECORDING_START_TOLERANCE
+        windowStart = course.start_time - tolerance
+        windowEnd = course.start_time + tolerance
+        if windowStart <= rec.time and rec.time <= windowEnd:
+            return course
     
-    # Return None if no match is found
     return None
 
 def determine_semester(date):
@@ -191,21 +196,17 @@ def determine_semester(date):
     else:
         return f'Fall{year}'
 
-def create_folder(course, base_path, date, time):
+def get_or_create_class_folder(course: Course, rec: Recording):
     # Getting the date from the determine_course function
     # Check if time is None before concatenation
-    if time is not None:
-        file_datetime = datetime.strptime(date + time, '%Y%m%d%H%M%S')
-    else:
-        file_datetime = datetime.strptime(date, '%Y%m%d')  # Just use the date part
-    semester = determine_semester(file_datetime)
+    semester = determine_semester(rec.get_datetime())
     
     # Creating the semester folder if it doesn't exist
-    semester_path = os.path.join(base_path, semester)
+    semester_path = os.path.join(DESTINATION_FOLDER, semester)
     os.makedirs(semester_path, exist_ok=True)
     
     # Creating the course folder inside the semester folder
-    folder_name = f"{course['course_number']}_{course['course_name']}_{course['professor_name']}".replace('&', '')
+    folder_name = f"{course.number}_{course.name}_{course.professor}".replace('&', '')
     folder_path = os.path.join(semester_path, folder_name)
     folder_path = os.path.abspath(folder_path)  # Use absolute path
     try:
@@ -213,13 +214,16 @@ def create_folder(course, base_path, date, time):
         logging.info(f"Folder created at {folder_path}")
     except Exception as e:
         logging.error(f"An error occurred while creating directory: {e}")
+
     return folder_path
 
-def move_video(src_path, dest_folder, course, date):  # Added date as a parameter
-    # Convert the date to a more readable format
-    readable_date = datetime.strptime(date, '%Y%m%d').strftime('%m-%d-%y')
+def move_video(course: Course, rec: Recording):  # Added date as a parameter
+    dest_folder = get_or_create_class_folder(course, rec)
 
-    new_filename = f"{course['course_name']}_{course['professor_name']}_{readable_date}.mp4"
+    # Convert the date to a more readable format
+    readable_date = rec.get_datetime().strftime("%m-%d-%y")
+
+    new_filename = f"{course.name}_{course.professor}_{readable_date}.mp4"
     dest_path = os.path.join(dest_folder, new_filename)
     counter = 1
 
@@ -230,57 +234,57 @@ def move_video(src_path, dest_folder, course, date):  # Added date as a paramete
         counter += 1
 
     try:
-        shutil.move(src_path, dest_path)
-        logging.info(f"Video moved from {src_path} to {dest_path}")
+        shutil.move(rec.file_path, dest_path)
+        logging.info(f"Video moved from {rec.file_path} to {dest_path}")
     except Exception as e:
         logging.error(f"An error occurred while moving file: {e}")
 
-def move_unmatched_video(src_path, dest_folder):
-    dest_path = os.path.join(dest_folder, os.path.basename(src_path))
+def move_unmatched_video(rec: Recording):
+    unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
+    os.makedirs(unmatched_folder, exist_ok=True)
+    dest_path = os.path.join(unmatched_folder, os.path.basename(rec.file_path))
     try:
-        shutil.move(src_path, dest_path)
-        logging.info(f"Video moved from {src_path} to {dest_path}")
+        shutil.move(rec.file_path, dest_path)
+        logging.info(f"No course matched for {rec.file_path}. Moved to {unmatched_folder}")
     except Exception as e:
         logging.info(f"An error occurred while moving file: {e}")
 
-def process_existing_files():
+def process_existing_files(courses: list[Course]):
     for filename in os.listdir(WATCH_FOLDER):
 
         if not filename.endswith('.mp4'):
             continue
 
         file_path = os.path.join(WATCH_FOLDER, filename)
-        room_number, date, time, course_number_full, section_number = parse_filename(os.path.basename(file_path))
+        rec = parse_recording_file(file_path)
 
-        logging.info(f"room_number: {room_number}, date: {date}, time: {time}, course_number_full: {course_number_full}, section_number: {section_number}")
+        logging.info(f"room_number: {rec.room_number}, date: {rec.date}, time: {rec.time}, course_number_full: {rec.course_number}, section_number: {rec.section_number}")
 
-        if course.wasScheduled():
-            course = find_course_by_room_and_time(room_number, date, time)
-            if course:
-                dest_folder = create_folder(course, DESTINATION_FOLDER, date, time)
-                move_video(file_path, dest_folder, course, date)
+        if rec.wasScheduled():
+            if rec.time is None:
+                course = find_course_by_number_and_section(courses, rec)
             else:
-                unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
-                os.makedirs(unmatched_folder, exist_ok=True)
-                move_unmatched_video(file_path, unmatched_folder)
-                logging.info(f"No course matched for {file_path}. Moved to {unmatched_folder}")
+                course = find_course_by_room_and_datetime(courses, rec)
+
+            if course is not None:
+                move_video(rec, course)
+            else:
+                move_unmatched_video(rec)
         else:
-            unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
-            os.makedirs(unmatched_folder, exist_ok=True)
-            move_unmatched_video(file_path, unmatched_folder)
+            move_unmatched_video(rec)
             
 
 if __name__ == "__main__":
-    read_courses(EXCEL_FILE_PATH)
+    courses = read_courses(EXCEL_FILE_PATH)
     
     # Process existing files immediately upon script start
-    process_existing_files()
+    process_existing_files(courses)
     
     while True:
         current_time = datetime.now().time()
         if current_time.hour == 3:
             logging.info("It's around 3 AM, time to sort the videos.")
-            process_existing_files()
+            process_existing_files(courses)
             time.sleep(3600)  # Sleep for 1 hour
         else:
             time.sleep(60)  # Sleep for 1 minute
