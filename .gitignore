@@ -4,3 +4,4 @@ dist
 .env
 config.ini
 log.txt
+.pytest_cache

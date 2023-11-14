@@ -12,11 +12,7 @@ import configparser
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
 DESTINATION_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
-EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
-WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
-
 RECORDING_START_TOLERANCE = timedelta(minutes=30)
 
 class Instructor:
@@ -36,12 +32,14 @@ class Course:
         self.start_time = start_time
         self.instructors = instructors
 
+    def __str__(self) -> str:
+        return f"title: {self.number}-{self.section_number} {self.name} room_number: {self.room_number}, days: {self.days}, time: {self.start_time}"
 
     
 class Recording:
     def __init__(self, filepath: str, date: date, time: time, room_number: str, rec_device:str, course_number: str=None, section_number: str=None, course_code: str=None):
         self.filepath = filepath
-        self.filename = os.path.basename(filepath)
+        self.filename = os.path.basename(filepath) if filepath else None
         self.date = date
         self.time = time
         self.room_number = room_number
@@ -57,12 +55,17 @@ class Recording:
         return not ((self.room_number is None) and (self.date is None) and (self.time))
     
     def course_number_full(self):
+        if self.course_code is None or self.course_number is None:
+            return ''
         return self.course_code + ' ' + self.course_number
     
+    def __str__ (self):
+        return f"room_number: {self.room_number}, date: {self.date}, time: {self.time}, course_number_full: {self.course_number_full()}, section_number: {self.section_number}"
+    
 # Read course details from the Excel sheet into the global 'courses' list
-def read_courses(csv_path) -> list[Course]:
+def read_courses(excel_path) -> list[Course]:
     courses: list[Course] = []
-    df = pd.read_excel(csv_path)
+    df = pd.read_excel(excel_path)
     df = df.dropna(how='all')
     for index, row in df.iterrows():
         instructor = str(row['Instructor LAST']).replace(' & ', ' ') if pd.notna(row['Instructor LAST']) else ''
@@ -106,11 +109,11 @@ def read_courses(csv_path) -> list[Course]:
 
 
         # Extract and store the section number
-        section_number = int(row['Section #']) if pd.notna(row['Section #']) else None
+        section_number = row['Section #'] if pd.notna(row['Section #']) else None
 
         course = Course(
             row['Course'],
-            section_number,
+            str(section_number),
             row['Course Title'],
             instructor,
             str(row['Room (cleaned)']),
@@ -128,7 +131,9 @@ def find_course_by_number_and_section(courses: list[Course], rec: Recording) -> 
 
     # Iterate through the courses list and look for a match
     for course in courses:
-        if course.number == rec.course_number_full() and course.section_number == rec.course_number_full():
+        print(f'|{type(course.number)}| = |{type(rec.course_number_full())}| |{type(course.section_number)}| = |{type(rec.section_number)}|')
+        if course.number == rec.course_number_full() and course.section_number == rec.section_number:
+            print("HUH")
             return course
 
     # Return None if no match is found
@@ -148,31 +153,23 @@ def parse_recording_file(filepath: str) -> Recording:
     match_capturecast = re.match(capturecast_pattern, filename)
     
     if match_extron:
-        room_number, date, time = match_extron.groups()
-        dt = datetime.strptime(f'{date}{time}', '%Y%m%d%H%M%S')
+        room_number, rec_date, rec_time = match_extron.groups()
+        dt = datetime.strptime(f'{rec_date}{rec_time}', '%Y%m%d%H%M%S')
         rec = Recording(filepath, dt.date(), dt.time(), room_number, 'extron')
         return rec
     if match_extron_2100:
-        date, time = match_extron_2100.groups()
+        rec_date, rec_time = match_extron_2100.groups()
         room_number = '2100'
-        dt = datetime.strptime(f'{date}{time}', '%Y%m%d%H%M%S')
+        dt = datetime.strptime(f'{rec_date}{rec_time}', '%Y%m%d%H%M%S')
         rec = Recording(filepath, dt.date(), dt.time(), room_number, 'extron_2100')
         return rec
     if match_capturecast:
         course_code, course_number, section_number, month, day, year = match_capturecast.groups()
-        date = f"{year}{month.zfill(2)}{day.zfill(2)}"
-        dt = datetime.strptime(f'{date}{time}', '%Y%m%d%H%M%S')
-        rec = Recording(filepath, dt.date(), dt.time(), None, 'capturecast', course_number, section_number, course_code)
+        rec_date = date(int(year), int(month), int(day))
+        rec = Recording(filepath, rec_date, None, None, 'capturecast', course_number, section_number, course_code)
         return rec
-        # TODO: DETERMINE IF THIS IS ACTUALLY NECESSARY
-        # course_number_full = course_code + ' ' + course_number  # Combine course_code and course_number
-
-        # matching_course = find_course_by_number_and_section(course_number_full, section_number)
-        # if matching_course:
-        #     room_number = matching_course['room_number']
-        #     return room_number, date, None, course_number_full, section_number  # Additional values for course_number and section_number
-
-    return None  # Default return
+    
+    return Recording(filepath, None, None, None, None)
 
 
 
@@ -252,7 +249,7 @@ def move_video(course: Course, rec: Recording):  # Added date as a parameter
         counter += 1
 
     try:
-        shutil.move(rec.filepath, dest_path)
+        # shutil.move(rec.filepath, dest_path)
         logging.info(f"Video moved from {rec.filepath} to {dest_path}")
     except Exception as e:
         logging.error(f"An error occurred while moving file: {e}")
@@ -267,39 +264,55 @@ def move_unmatched_video(rec: Recording):
     except Exception as e:
         logging.info(f"An error occurred while moving file: {e}")
 
-def process_existing_files(courses: list[Course]):
-    for filename in os.listdir(WATCH_FOLDER):
+def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tuple[Recording, Course or None]]:
+    pairs = []
+    for filename in os.listdir(watch_path):
 
         if not filename.endswith('.mp4'):
             continue
 
-        filepath = os.path.join(WATCH_FOLDER, filename)
+        filepath = os.path.join(watch_path, filename)
         rec = parse_recording_file(filepath)
 
-        logging.info(f"room_number: {rec.room_number}, date: {rec.date}, time: {rec.time}, course_number_full: {rec.course_number}, section_number: {rec.section_number}")
-
         if rec.was_scheduled():
+            logging.info(rec)
+            
             if rec.time is None:
                 course = find_course_by_number_and_section(courses, rec)
             else:
                 course = find_course_by_room_and_datetime(courses, rec)
 
             if course is not None:
-                move_video(course, rec)
+                pairs.append((rec, course))
             else:
-                move_unmatched_video(rec)
+                pairs.append((rec, None))
         else:
-            move_unmatched_video(rec)
+            pairs.append((rec, None))
+
+    return pairs
+
+def process_existing_files(courses: list[Course], watch_path):
+    pairs = match_courses_to_recordings(courses, watch_path)
+    for pair in pairs:
+        if pair[1] is None:
+            move_unmatched_video(pair[0])
+        else:
+            move_video(pair[1], pair[0])
             
 
 if __name__ == "__main__":
-    courses = read_courses(EXCEL_FILE_PATH)
-
-    # Initialize logging
-    logging.basicConfig(format='[%(datefmt)s] [%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename='log.txt', level=logging.INFO)
+    WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
+    EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
+    WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
     
+    # Initialize logging
+    logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename='log.txt', level=logging.INFO)
+    logging.info('LOGGER READY')
+
+    courses = read_courses(EXCEL_FILE_PATH)
+ 
     # Process existing files immediately upon script start
-    process_existing_files(courses)
+    process_existing_files(courses, WATCH_FOLDER)
     
     while True:
         current_time = datetime.now().time()

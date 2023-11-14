@@ -147,14 +147,12 @@ class KalturaClient:
             res = requests.post(KalturaClient.kurl('user/action/getByLoginId'), json=self.client.getRequestData({
                 'loginId': loginId
             })).json()
-            print(res)
             return KalturaUser.fromJsonResponse(res)
         
         def get(self, userId) -> KalturaUser:
             res = requests.post(KalturaClient.kurl('user/action/get'), json=self.client.getRequestData({
                 'userId': userId
             })).json()
-            print(res)
             return KalturaUser.fromJsonResponse(res)
     
     class SessionData:
