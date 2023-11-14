@@ -19,15 +19,22 @@ WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
 
 RECORDING_START_TOLERANCE = timedelta(minutes=30)
 
+class Instructor:
+    def __init__(self, first, last, unid):
+        self.first = first
+        self.last = last
+        self.unid = unid
+
 class Course:
-    def __init__(self, number: str, section: str, name: str, professor: str, room_number: str, days: set[str], start_time: time):
+    def __init__(self, number: str, section: str, name: str, instructor_last: str, room_number: str, days: set[str], start_time: time, instructors: list[Instructor]):
         self.number = number
         self.section_number = section
         self.name = name
-        self.professor = professor
+        self.instructor_last = instructor_last
         self.room_number = room_number
         self.days = days
         self.start_time = start_time
+        self.instructors = instructors
 
 
     
@@ -46,8 +53,11 @@ class Recording:
     def get_datetime(self):
         return datetime(self.date.year, self.date.month, self.date.day, self.time.hour, self.time.minute, 0, 0)
         
-    def wasScheduled (self):
+    def was_scheduled (self):
         return not ((self.room_number is None) and (self.date is None) and (self.time))
+    
+    def course_number_full(self):
+        return self.course_code + ' ' + self.course_number
     
 # Read course details from the Excel sheet into the global 'courses' list
 def read_courses(csv_path) -> list[Course]:
@@ -87,6 +97,13 @@ def read_courses(csv_path) -> list[Course]:
         else:
             logging.warning(f"Invalid start time found for course {row['Course']}. Skipping.")
 
+        instructors = []
+        instructorStrings = row['Instructor'].split('; ')
+        for s in instructorStrings:
+            instructorMatch = re.search(r'([^(),\d]+),\s*([^()\d]+)\s+\((\d{8})\);*\s*', s)
+            groups = instructorMatch.groups()
+            instructors.append(Instructor(groups[1], groups[0], groups[2]))
+
 
         # Extract and store the section number
         section_number = int(row['Section #']) if pd.notna(row['Section #']) else None
@@ -98,7 +115,8 @@ def read_courses(csv_path) -> list[Course]:
             instructor,
             str(row['Room (cleaned)']),
             days,
-            start_time
+            start_time,
+            instructors
         )
 
         courses.append(course)
@@ -110,7 +128,7 @@ def find_course_by_number_and_section(courses: list[Course], rec: Recording) -> 
 
     # Iterate through the courses list and look for a match
     for course in courses:
-        if course.number == rec.course_number and course.section_number == rec.section_number:
+        if course.number == rec.course_number_full() and course.section_number == rec.course_number_full():
             return course
 
     # Return None if no match is found
@@ -206,7 +224,7 @@ def get_or_create_class_folder(course: Course, rec: Recording):
     os.makedirs(semester_path, exist_ok=True)
     
     # Creating the course folder inside the semester folder
-    folder_name = f"{course.number}_{course.name}_{course.professor}".replace('&', '')
+    folder_name = f"{course.number}_{course.name}_{course.instructor_last}".replace('&', '')
     folder_path = os.path.join(semester_path, folder_name)
     folder_path = os.path.abspath(folder_path)  # Use absolute path
     try:
@@ -223,7 +241,7 @@ def move_video(course: Course, rec: Recording):  # Added date as a parameter
     # Convert the date to a more readable format
     readable_date = rec.get_datetime().strftime("%m-%d-%y")
 
-    new_filename = f"{course.name}_{course.professor}_{readable_date}.mp4"
+    new_filename = f"{course.name}_{course.instructor_last}_{readable_date}.mp4"
     dest_path = os.path.join(dest_folder, new_filename)
     counter = 1
 
@@ -260,7 +278,7 @@ def process_existing_files(courses: list[Course]):
 
         logging.info(f"room_number: {rec.room_number}, date: {rec.date}, time: {rec.time}, course_number_full: {rec.course_number}, section_number: {rec.section_number}")
 
-        if rec.wasScheduled():
+        if rec.was_scheduled():
             if rec.time is None:
                 course = find_course_by_number_and_section(courses, rec)
             else:
