@@ -4,7 +4,8 @@ import datetime
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-from video_sorter import read_courses, match_courses_to_recordings, Recording
+from data_types import *
+from video_sorter import read_courses, match_courses_to_recordings
 
 def clear_directory(directory_path):
     try:
@@ -50,6 +51,7 @@ def generate_files (recs: list[Recording]) -> list[str]:
         rec.filepath = filepath
         rec.filename = filename
         f = open(filepath, "wb")
+        f.write(bytes([0xFF, 0xFF, 0xFF, 0xFF]))
         f.close()
 
     return (watch_path, unmatched_path, matched_path)
@@ -97,3 +99,9 @@ class TestSorter:
         pairs = match_courses_to_recordings(courses, watch)
         assert str(pairs[0][0]) == str(testrec)
         assert pairs[0][1].name == 'Course2'
+
+    def test_get_user_alphabetical (self):
+        courses = read_test_courses()
+        for x in courses:
+            if len(x.instructors) == 2:
+                assert x.get_first_instructor_alphabetically().last == 'FINCH'
