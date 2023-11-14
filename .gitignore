@@ -5,3 +5,4 @@ dist
 config.ini
 log.txt
 .pytest_cache
+__pycache__
