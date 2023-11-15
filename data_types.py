@@ -1,11 +1,11 @@
-from datetime import date, time
+from datetime import date, time, datetime
 import os
 
 class Instructor:
-    def __init__(self, first, last, unid):
+    def __init__(self, first, last, unid_zero_prefix):
         self.first = first
         self.last = last
-        self.unid = unid
+        self.unid = f'u{unid_zero_prefix[1:]}'
 
 class Course:
     def __init__(self, number: str, section: str, name: str, instructor_last: str, room_number: str, days: set[str], start_time: time, instructors: list[Instructor]):

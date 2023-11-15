@@ -105,3 +105,14 @@ class TestSorter:
         for x in courses:
             if len(x.instructors) == 2:
                 assert x.get_first_instructor_alphabetically().last == 'FINCH'
+
+    def test_instructor_import (self):
+        courses = read_test_courses()
+        assert courses[0].instructors[0].last == 'BEEKHUIZEN'
+        assert courses[2].instructors[0].last == 'FINCH'
+        assert courses[2].instructors[1].last == 'MORALES'
+        for c in courses:
+            for i in c.instructors:
+                assert len(i.unid) == 8
+                assert i.unid[0] == 'u'
+
