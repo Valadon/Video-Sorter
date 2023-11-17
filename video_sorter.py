@@ -267,9 +267,11 @@ def upload_files (pairs: list[tuple[Recording, Course or None]]):
                 new_path = get_new_filepath(pair[0], pair[1])
                 new_name = os.path.basename(new_path).replace('.mp4', '')
                 upload_video(pair[0], pair[1], client, new_name)
-                move_video(pairs[0], new_path)
+                logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
+                move_video(pair[0], new_path)
+                logging.info(f'Sucessfully moved: {pair[0]}')
             except Exception as e:
-                logging.error(f'Error while uploading {pair[0]}. {e}')
+                logging.error(f'Error while uploading and moving {pair[0]}. {e}')
         else:
             move_unmatched_video(pair[0])
 
@@ -289,7 +291,7 @@ if __name__ == "__main__":
     
     # Initialize logging
     logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename=LOG_FILE, level=logging.INFO)
-    logging.info('\nLogger Ready\n')
+    logging.info('\n\nStarting the video sorter\n')
 
     courses = read_courses(EXCEL_FILE_PATH)
  
