@@ -47,6 +47,8 @@ class Recording:
         return os.path.basename(self.filepath) if self.filepath else None
 
     def get_datetime(self):
+        if self.time is None:
+            return None
         return datetime(self.date.year, self.date.month, self.date.day, self.time.hour, self.time.minute, 0, 0)
         
     def was_scheduled (self):

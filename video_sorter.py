@@ -153,7 +153,7 @@ def find_course_by_room_and_datetime(courses: list[Course], rec: Recording) -> C
     
     return None
 
-def determine_semester(date):
+def determine_semester(date: date):
     month = date.month
     year = date.year % 100  # Getting the last two digits of the year
     if month <= 4:
@@ -166,8 +166,7 @@ def determine_semester(date):
 def get_or_create_class_folder(course: Course, rec: Recording):
     # Getting the date from the determine_course function
     # Check if time is None before concatenation
-    dt = rec.get_datetime()
-    semester = determine_semester(dt)
+    semester = determine_semester(rec.date)
     
     # Creating the semester folder if it doesn't exist
     semester_path = os.path.join(DESTINATION_FOLDER, semester)
@@ -189,7 +188,7 @@ def get_new_filepath(rec: Recording, course: Course):
     dest_folder = get_or_create_class_folder(course, rec)
     
     # Convert the date to a more readable format
-    readable_date = rec.get_datetime().strftime("%m-%d-%y")
+    readable_date = rec.date.strftime("%m-%d-%y")
 
     new_filename = f"{course.name}_{course.instructor_last}_{readable_date}"
     counter = 1
@@ -290,7 +289,7 @@ if __name__ == "__main__":
     
     # Initialize logging
     logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename=LOG_FILE, level=logging.INFO)
-    logging.info('LOGGER READY')
+    logging.info('\nLogger Ready\n')
 
     courses = read_courses(EXCEL_FILE_PATH)
  
