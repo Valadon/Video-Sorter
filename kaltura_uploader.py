@@ -21,11 +21,11 @@ def get_kaltura_client() -> KalturaClient:
 
     return client
 
-def upload_video (rec: Recording, course: Course, kalturaClient: KalturaClient):
+def upload_video (rec: Recording, course: Course, kaltura_client: KalturaClient, kaltura_name):
     # File uploading
     ## Step 1: Get an upload token
     uploadToken = KalturaUploadToken()
-    token = kalturaClient.uploadToken.add(uploadToken)
+    token = kaltura_client.uploadToken.add(uploadToken)
 
     ## Step 2: Upload the file
     uploadTokenId = token.id
@@ -33,19 +33,19 @@ def upload_video (rec: Recording, course: Course, kalturaClient: KalturaClient):
     resume = False
     finalChunk = True
     resumeAt = 0
-    result = kalturaClient.uploadToken.upload(uploadTokenId, fileData, resume, finalChunk, resumeAt)
+    result = kaltura_client.uploadToken.upload(uploadTokenId, fileData, resume, finalChunk, resumeAt)
 
     ## Step 3: Create a media entry
     mediaEntry = KalturaMediaEntry()
-    mediaEntry.name = rec.filename
+    mediaEntry.name = kaltura_name
     mediaEntry.description = f'Class recording for {course.number} {course.name} on {rec.date.strftime("%d-%m-%Y")}'
     mediaEntry.mediaType = KalturaMediaType.VIDEO
     mediaEntry.userId = course.get_first_instructor_alphabetically().unid
-    entry = kalturaClient.media.add(mediaEntry)
+    entry = kaltura_client.media.add(mediaEntry)
 
     ## Step 4: Attach the video
     entry_id = entry.id
     resource = KalturaUploadedFileTokenResource()
     resource.token = uploadTokenId
 
-    result = kalturaClient.media.addContent(entry_id, resource)
+    result = kaltura_client.media.addContent(entry_id, resource)

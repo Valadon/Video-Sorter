@@ -7,6 +7,12 @@ class Instructor:
         self.last = last
         self.unid = f'u{unid_zero_prefix[1:]}'
 
+    def full (self):
+        return f'{self.first} {self.last}'
+
+    def __str__(self) -> str:
+        return f'Instructor(name={self.full()}, unid={self.unid})'
+
 class Course:
     def __init__(self, number: str, section: str, name: str, instructor_last: str, room_number: str, days: set[str], start_time: time, instructors: list[Instructor]):
         self.number = number
@@ -22,13 +28,12 @@ class Course:
         return sorted(self.instructors, key=lambda x : x.last + x.first)[0]
 
     def __str__(self) -> str:
-        return f"title: {self.number}-{self.section_number} {self.name} room_number: {self.room_number}, days: {self.days}, time: {self.start_time}"
+        return f"Course(title={self.number}-{self.section_number} {self.name}, room_number={self.room_number}, days={self.days}, time={self.start_time})"
 
     
 class Recording:
     def __init__(self, filepath: str, date: date, time: time, room_number: str, rec_device:str, course_number: str=None, section_number: str=None, course_code: str=None):
         self.filepath = filepath
-        self.filename = os.path.basename(filepath) if filepath else None
         self.date = date
         self.time = time
         self.room_number = room_number
@@ -36,6 +41,10 @@ class Recording:
         self.course_number = course_number
         self.section_number = section_number
         self.course_code = course_code
+
+    @property
+    def filename (self):
+        return os.path.basename(self.filepath) if self.filepath else None
 
     def get_datetime(self):
         return datetime(self.date.year, self.date.month, self.date.day, self.time.hour, self.time.minute, 0, 0)
@@ -49,5 +58,5 @@ class Recording:
         return self.course_code + ' ' + self.course_number
     
     def __str__ (self):
-        return f"room_number: {self.room_number}, date: {self.date}, time: {self.time}, course_number_full: {self.course_number_full()}, section_number: {self.section_number}"
+        return f"Recording(room_number={self.room_number}, date={self.date}, time={self.time}, course_number_full={self.course_number_full()}, section_number={self.section_number}, path={self.filepath})"
  

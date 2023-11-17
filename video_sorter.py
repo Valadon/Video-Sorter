@@ -15,7 +15,6 @@ config = configparser.ConfigParser()
 config.read('config.ini')
 
 DESTINATION_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
-MODE = os.path.normpath(config.get('Settings', 'mode'))
 RECORDING_START_TOLERANCE = timedelta(minutes=30)
    
 # Read course details from the Excel sheet into the global 'courses' list
@@ -186,32 +185,31 @@ def get_or_create_class_folder(course: Course, rec: Recording):
 
     return folder_path
 
-def get_new_filepath(course: Course, rec: Recording, expected_dir: str):
+def get_new_filepath(rec: Recording, course: Course):
+    dest_folder = get_or_create_class_folder(course, rec)
+    
     # Convert the date to a more readable format
     readable_date = rec.get_datetime().strftime("%m-%d-%y")
 
     new_filename = f"{course.name}_{course.instructor_last}_{readable_date}"
     counter = 1
     ext = '.mp4'
-    full_path = os.path.join(expected_dir, f'{new_filename}{ext}')
+    full_path = os.path.join(dest_folder, f'{new_filename}{ext}')
 
     # If the file already exists, append a number to the name
     while os.path.exists(full_path):
-        full_path = os.path.join(expected_dir, f'{new_filename}_{counter}{ext}')
+        full_path = os.path.join(dest_folder, f'{new_filename}_{counter}{ext}')
         counter += 1
 
     return full_path
 
-def move_video(course: Course, rec: Recording):  # Added date as a parameter
-    dest_folder = get_or_create_class_folder(course, rec)
-
-    dest_path = get_new_filepath(course, rec, dest_folder)
-
+def move_video(rec: Recording, dest_path):
     try:
         shutil.move(rec.filepath, dest_path)
         logging.info(f"Video moved from {rec.filepath} to {dest_path}")
+        rec.filepath = dest_path
     except Exception as e:
-        logging.error(f"An error occurred while moving file: {e}")
+        logging.error(f"An error occurred while moving {rec}: {e}")
 
 def move_unmatched_video(rec: Recording):
     unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
@@ -219,7 +217,7 @@ def move_unmatched_video(rec: Recording):
     dest_path = os.path.join(unmatched_folder, os.path.basename(rec.filepath))
     try:
         shutil.move(rec.filepath, dest_path)
-        logging.info(f"No course matched for {rec.filepath}. Moved to {unmatched_folder}")
+        logging.info(f"No course matched for {rec}. Moved to {unmatched_folder}")
     except Exception as e:
         logging.info(f"An error occurred while moving file: {e}")
 
@@ -255,26 +253,39 @@ def move_files (pairs: list[tuple[Recording, Course or None]]):
         if pair[1] is None:
             move_unmatched_video(pair[0])
         else:
-            move_video(pair[1], pair[0])
+            new_path = get_new_filepath(pair[0], pair[1])
+            move_video(pair[0], new_path)
 
 def upload_files (pairs: list[tuple[Recording, Course or None]]):
-    client = get_kaltura_client()
+    try:
+        client = get_kaltura_client()
+    except Exception as e:
+        logging.error(f"Could not establish a kaltura session: {e}")
+        return
     for pair in pairs:
         if pair[1] is not None:
-            pass
-            # upload_video(pair[0], pair[1], client)
+            try:
+                new_path = get_new_filepath(pair[0], pair[1])
+                new_name = os.path.basename(new_path).replace('.mp4', '')
+                upload_video(pair[0], pair[1], client, new_name)
+                move_video(pairs[0], new_path)
+            except Exception as e:
+                logging.error(f'Error while uploading {pair[0]}. {e}')
+        else:
+            move_unmatched_video(pair[0])
 
-def process_existing_files(courses: list[Course], watch_path):
+def process_existing_files(courses: list[Course], watch_path, mode):
     pairs = match_courses_to_recordings(courses, watch_path)
-    if MODE == 'Upload':
+    if mode == 'Upload':
         upload_files(pairs)
-    elif MODE == 'Move':
+    elif mode == 'Move':
         move_files(pairs)
 
 if __name__ == "__main__":
     WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
     EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
     WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
+    MODE = os.path.normpath(config.get('Settings', 'mode'))
     
     # Initialize logging
     logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename='log.txt', level=logging.INFO)
@@ -283,7 +294,7 @@ if __name__ == "__main__":
     courses = read_courses(EXCEL_FILE_PATH)
  
     # Process existing files immediately upon script start
-    process_existing_files(courses, WATCH_FOLDER)
+    process_existing_files(courses, WATCH_FOLDER, MODE)
     
     while True:
         current_time = datetime.now().time()
