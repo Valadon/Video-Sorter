@@ -19,6 +19,10 @@ RECORDING_START_TOLERANCE = timedelta(minutes=30)
    
 # Read course details from the Excel sheet into the global 'courses' list
 def read_courses(excel_path) -> list[Course]:
+    """
+    Reads a list of courses from an excel file and parses them to Course objects. 
+    For an example of how this excel file should look, see test_courses.xlsx
+    """
     courses: list[Course] = []
     df = pd.read_excel(excel_path)
     df = df.dropna(how='all')
@@ -82,6 +86,10 @@ def read_courses(excel_path) -> list[Course]:
     return courses
 
 def find_course_by_number_and_section(courses: list[Course], rec: Recording) -> Course:
+    """
+    Finds the course in the list whose number and section matches the 
+    one in the given recording object
+    """
     logging.debug(f"Searching for course: {rec.course_number}, section: {rec.course_number}")
 
     # Iterate through the courses list and look for a match
@@ -93,6 +101,9 @@ def find_course_by_number_and_section(courses: list[Course], rec: Recording) -> 
     return None
 
 def parse_recording_file(filepath: str) -> Recording:
+    """
+    Parses a recording filename and puts that information into a recording object
+    """
     filename = os.path.basename(filepath)
 
     # Existing filename patterns
@@ -127,6 +138,10 @@ def parse_recording_file(filepath: str) -> Recording:
 
 
 def find_course_by_room_and_datetime(courses: list[Course], rec: Recording) -> Course:
+    """
+    Finds the course in the given list which has a matching room, 
+    date and time to the given recording
+    """
     # Iterate through the courses and look for a match
     for course in courses:
         # Check for room match
@@ -154,6 +169,9 @@ def find_course_by_room_and_datetime(courses: list[Course], rec: Recording) -> C
     return None
 
 def determine_semester(date: date):
+    """
+    Gets the semester in which a date occurred
+    """
     month = date.month
     year = date.year % 100  # Getting the last two digits of the year
     if month <= 4:
@@ -164,6 +182,10 @@ def determine_semester(date: date):
         return f'Fall{year}'
 
 def get_or_create_class_folder(course: Course, rec: Recording):
+    """
+    Returns the file path of the folder where a recording should go 
+    based on the recording date and course
+    """
     # Getting the date from the determine_course function
     # Check if time is None before concatenation
     semester = determine_semester(rec.date)
@@ -185,6 +207,11 @@ def get_or_create_class_folder(course: Course, rec: Recording):
     return folder_path
 
 def get_new_filepath(rec: Recording, course: Course):
+    """
+    Returns a new filepath for the recording based on the course it is assigned to.
+
+    For example, LAW 5000_Beekhuizen_11-17-2023
+    """
     dest_folder = get_or_create_class_folder(course, rec)
     
     # Convert the date to a more readable format
@@ -203,6 +230,9 @@ def get_new_filepath(rec: Recording, course: Course):
     return full_path
 
 def move_video(rec: Recording, dest_path):
+    """
+    Moves a recording to the given destination
+    """
     try:
         shutil.move(rec.filepath, dest_path)
         logging.info(f"Video moved from {rec.filepath} to {dest_path}")
@@ -211,6 +241,9 @@ def move_video(rec: Recording, dest_path):
         logging.error(f"An error occurred while moving {rec}: {e}")
 
 def move_unmatched_video(rec: Recording):
+    """
+    Moves a recording to the unmatched videos location specified in the config
+    """
     unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
     os.makedirs(unmatched_folder, exist_ok=True)
     dest_path = os.path.join(unmatched_folder, os.path.basename(rec.filepath))
@@ -221,6 +254,11 @@ def move_unmatched_video(rec: Recording):
         logging.info(f"An error occurred while moving file: {e}")
 
 def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tuple[Recording, Course or None]]:
+    """
+    Looks for videos in the watch path and tries to figure out which 
+    course in the given list it was for. Returns a list of tuples
+    which associates each recording to a course (or null)
+    """
     pairs = []
     for filename in os.listdir(watch_path):
 
@@ -248,6 +286,10 @@ def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tupl
     return pairs
 
 def move_files (pairs: list[tuple[Recording, Course or None]]):
+    """
+    Given a list of recordings and their matching course, generate the new 
+    file name and move the video to the correct folder.
+    """
     for pair in pairs:
         if pair[1] is None:
             move_unmatched_video(pair[0])
@@ -256,6 +298,10 @@ def move_files (pairs: list[tuple[Recording, Course or None]]):
             move_video(pair[0], new_path)
 
 def upload_files (pairs: list[tuple[Recording, Course or None]]):
+    """
+    Given a list of tuples containing Recordings and their corresponding Courses, 
+    uploads files to Kaltura, and then sorts them into folders based on their course
+    """
     try:
         client = get_kaltura_client()
     except Exception as e:
@@ -271,13 +317,19 @@ def upload_files (pairs: list[tuple[Recording, Course or None]]):
                     logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
                 except Exception as e:
                     logging.error(f'Error while uploading and moving {pair[0]}. {e}')
-                    
+
                 move_video(pair[0], new_path)
                 logging.info(f'Sucessfully moved: {pair[0]}')
         else:
             move_unmatched_video(pair[0])
 
+
 def process_existing_files(courses: list[Course], watch_path, mode):
+    """
+    Given a list of courses and file path on which to watch for 
+    videos, processes videos accord to what mode has been set 
+    in the config file.
+    """
     pairs = match_courses_to_recordings(courses, watch_path)
     if mode == 'Upload':
         upload_files(pairs)
