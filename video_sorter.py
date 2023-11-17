@@ -286,9 +286,10 @@ if __name__ == "__main__":
     EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
     WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
     MODE = os.path.normpath(config.get('Settings', 'mode'))
+    LOG_FILE = config.get('Settings', 'log_file')
     
     # Initialize logging
-    logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename='log.txt', level=logging.INFO)
+    logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename=LOG_FILE, level=logging.INFO)
     logging.info('LOGGER READY')
 
     courses = read_courses(EXCEL_FILE_PATH)
