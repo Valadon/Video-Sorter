@@ -263,15 +263,17 @@ def upload_files (pairs: list[tuple[Recording, Course or None]]):
         return
     for pair in pairs:
         if pair[1] is not None:
-            try:
-                new_path = get_new_filepath(pair[0], pair[1])
-                new_name = os.path.basename(new_path).replace('.mp4', '')
-                upload_video(pair[0], pair[1], client, new_name)
-                logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
+            for i in enumerate(pair[1].instructors):
+                try:
+                    new_path = get_new_filepath(pair[0], pair[1])
+                    new_name = os.path.basename(new_path).replace('.mp4', '')
+                    upload_video(pair[0], pair[1], client, new_name, i)
+                    logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
+                except Exception as e:
+                    logging.error(f'Error while uploading and moving {pair[0]}. {e}')
+                    
                 move_video(pair[0], new_path)
                 logging.info(f'Sucessfully moved: {pair[0]}')
-            except Exception as e:
-                logging.error(f'Error while uploading and moving {pair[0]}. {e}')
         else:
             move_unmatched_video(pair[0])
 
