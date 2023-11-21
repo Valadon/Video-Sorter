@@ -297,6 +297,8 @@ def move_files (pairs: list[tuple[Recording, Course or None]], dest_folder: str)
         else:
             new_path = get_new_filepath(pair[0], pair[1], dest_folder)
             move_video(pair[0], new_path)
+            for ins in pair[0].instructors:
+                logging.debug(f'Video moved for {ins}')
 
 def upload_files (pairs: list[tuple[Recording, Course or None]], dest_folder: str):
     """
@@ -346,7 +348,7 @@ if __name__ == "__main__":
     LOG_FILE = config.get('Settings', 'log_file')
     
     # Initialize logging
-    logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename=LOG_FILE, level=logging.INFO)
+    logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename=LOG_FILE, level=logging.DEBUG)
     logging.info('\n\nStarting the video sorter\n')
 
     courses = read_courses(EXCEL_FILE_PATH)
