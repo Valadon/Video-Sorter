@@ -14,7 +14,6 @@ from data_types import *
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-DESTINATION_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
 RECORDING_START_TOLERANCE = timedelta(minutes=30)
    
 # Read course details from the Excel sheet into the global 'courses' list
@@ -143,7 +142,7 @@ def find_course_by_room_and_datetime(courses: list[Course], rec: Recording) -> C
     date and time to the given recording
     """
     logging.debug(f'Trying to match {rec} by room and datetime')
-    
+
     # Iterate through the courses and look for a match
     for course in courses:
         # Check for room match
