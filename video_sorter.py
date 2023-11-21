@@ -297,7 +297,7 @@ def move_files (pairs: list[tuple[Recording, Course or None]], dest_folder: str)
         else:
             new_path = get_new_filepath(pair[0], pair[1], dest_folder)
             move_video(pair[0], new_path)
-            for ins in pair[0].instructors:
+            for ins in pair[1].instructors:
                 logging.debug(f'Video moved for {ins}')
 
 def upload_files (pairs: list[tuple[Recording, Course or None]], dest_folder: str):
@@ -342,7 +342,7 @@ def process_existing_files(courses: list[Course], watch_path, dest_path, mode):
 if __name__ == "__main__":
     WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
     WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
-    DEST_FOLDER = os.path.normpath(config.get('Paths', 'dest_folder'))
+    DEST_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
     EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
     MODE = os.path.normpath(config.get('Settings', 'mode'))
     LOG_FILE = config.get('Settings', 'log_file')
