@@ -90,7 +90,7 @@ def find_course_by_number_and_section(courses: list[Course], rec: Recording) -> 
     Finds the course in the list whose number and section matches the 
     one in the given recording object
     """
-    logging.debug(f"Searching for course: {rec.course_number}, section: {rec.course_number}")
+    logging.debug(f"Searching for {rec} by course number and section")
 
     # Iterate through the courses list and look for a match
     for course in courses:
@@ -142,6 +142,8 @@ def find_course_by_room_and_datetime(courses: list[Course], rec: Recording) -> C
     Finds the course in the given list which has a matching room, 
     date and time to the given recording
     """
+    logging.debug(f'Trying to match {rec} by room and datetime')
+    
     # Iterate through the courses and look for a match
     for course in courses:
         # Check for room match
@@ -312,7 +314,7 @@ def upload_files (pairs: list[tuple[Recording, Course or None]], dest_folder: st
         return
     for pair in pairs:
         if pair[1] is not None:
-            for i in enumerate(pair[1].instructors):
+            for i, insr in enumerate(pair[1].instructors):
                 try:
                     new_path = get_new_filepath(pair[0], pair[1], dest_folder)
                     new_name = os.path.basename(new_path).replace('.mp4', '')
