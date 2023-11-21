@@ -240,16 +240,17 @@ def move_video(rec: Recording, dest_path):
     except Exception as e:
         logging.error(f"An error occurred while moving {rec}: {e}")
 
-def move_unmatched_video(rec: Recording):
+def move_unmatched_video(rec: Recording, dest_folder):
     """
     Moves a recording to the unmatched videos location specified in the config
     """
-    unmatched_folder = os.path.join(DESTINATION_FOLDER, 'Unmatched_Videos')
+    unmatched_folder = os.path.join(dest_folder, 'Unmatched_Videos')
     os.makedirs(unmatched_folder, exist_ok=True)
     dest_path = os.path.join(unmatched_folder, os.path.basename(rec.filepath))
     try:
         shutil.move(rec.filepath, dest_path)
         logging.info(f"No course matched for {rec}. Moved to {unmatched_folder}")
+        rec.filepath = dest_path
     except Exception as e:
         logging.info(f"An error occurred while moving file: {e}")
 
@@ -321,10 +322,10 @@ def upload_files (pairs: list[tuple[Recording, Course or None]], dest_folder: st
                 move_video(pair[0], new_path)
                 logging.info(f'Sucessfully moved: {pair[0]}')
         else:
-            move_unmatched_video(pair[0])
+            move_unmatched_video(pair[0], dest_folder)
 
 
-def process_existing_files(courses: list[Course], watch_path, mode):
+def process_existing_files(courses: list[Course], watch_path, dest_path, mode):
     """
     Given a list of courses and file path on which to watch for 
     videos, processes videos accord to what mode has been set 
@@ -332,9 +333,9 @@ def process_existing_files(courses: list[Course], watch_path, mode):
     """
     pairs = match_courses_to_recordings(courses, watch_path)
     if mode == 'Upload':
-        upload_files(pairs)
+        upload_files(pairs, dest_path)
     elif mode == 'Move':
-        move_files(pairs)
+        move_files(pairs, dest_path)
 
 if __name__ == "__main__":
     WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
