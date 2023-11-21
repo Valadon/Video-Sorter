@@ -15,13 +15,16 @@ def clear_directory(directory_path):
                 os.remove(file_path)
             else:
                 clear_directory(file_path)
-    except OSError:
+                os.rmdir(file_path)
+    except OSError as e:
         exit(1)
 
-def generate_files (recs: list[Recording]):
+def clear_test_folder ():
     test_folder = config.get('Paths', 'test_folder')
-
     clear_directory(test_folder)
+
+def generate_files (recs: list[Recording], numBytes=4):
+    test_folder = config.get('Paths', 'test_folder')
 
     watch_path = os.path.join(test_folder, 'WATCH')
     os.makedirs(watch_path, exist_ok=True)
@@ -49,7 +52,7 @@ def generate_files (recs: list[Recording]):
         filepath = os.path.join(watch_path, filename)
         rec.filepath = filepath
         f = open(filepath, "wb")
-        f.write(bytes([0xFF, 0xFF, 0xFF, 0xFF]))
+        f.write(bytes([0xFF for _ in range(numBytes)]))
         f.close()
 
     return (watch_path, unmatched_path, matched_path)
@@ -78,6 +81,7 @@ class TestSorter:
     def test_valid_extron_sorting (self):
         courses = read_test_courses()
         testrec = get_test_recs()['extron']
+        clear_test_folder()
         watch, unmatched, matched = generate_files([testrec])
         pairs = match_courses_to_recordings(courses, watch)
         assert str(pairs[0][0]) == str(testrec)
@@ -86,6 +90,7 @@ class TestSorter:
     def test_unscheduled_extron_sorting (self):
         courses = read_test_courses()
         testrec = get_test_recs()['extron_invalid']
+        clear_test_folder()
         watch, unmatched, matched = generate_files([testrec])
         pairs = match_courses_to_recordings(courses, watch)
         assert str(pairs[0][0]) == str(testrec)
@@ -94,6 +99,7 @@ class TestSorter:
     def test_valid_2100_sorting (self):
         courses = read_test_courses()
         testrec = get_test_recs()['extron_2100']
+        clear_test_folder()
         watch, unmatched, matched = generate_files([testrec])
         pairs = match_courses_to_recordings(courses, watch)
         assert str(pairs[0][0]) == str(testrec)
@@ -102,6 +108,7 @@ class TestSorter:
     def test_valid_capturecast_sorting (self):
         courses = read_test_courses()
         testrec = get_test_recs()['capturecast']
+        clear_test_folder()
         watch, unmatched, matched = generate_files([testrec])
         pairs = match_courses_to_recordings(courses, watch)
         assert str(pairs[0][0]) == str(testrec)
@@ -123,16 +130,58 @@ class TestSorter:
                 assert len(i.unid) == 8
                 assert i.unid[0] == 'u'
 
-    def test_matched_video_moving (self):
+    def test_matched_video_moving_extron (self):
         courses = read_test_courses()
         testrec = get_test_recs()['extron']
+        clear_test_folder()
         watch, unmatched, matched = generate_files([testrec])
         old_path = testrec.filepath
         assert os.path.exists(old_path)
         pairs = match_courses_to_recordings(courses, watch)
-        new_path = get_new_filepath(pairs[0][0], pairs[0][1])
+        new_path = get_new_filepath(pairs[0][0], pairs[0][1], matched)
         move_video(pairs[0][0], new_path)
         assert not os.path.exists(old_path)
         assert os.path.exists(new_path)
         assert new_path == pairs[0][0].filepath
 
+    def test_matched_video_moving_2100 (self):
+        courses = read_test_courses()
+        testrec = get_test_recs()['extron_2100']
+        clear_test_folder()
+        watch, unmatched, matched = generate_files([testrec])
+        old_path = testrec.filepath
+        assert os.path.exists(old_path)
+        pairs = match_courses_to_recordings(courses, watch)
+        new_path = get_new_filepath(pairs[0][0], pairs[0][1], matched)
+        move_video(pairs[0][0], new_path)
+        assert not os.path.exists(old_path)
+        assert os.path.exists(new_path)
+        assert new_path == pairs[0][0].filepath
+
+    def test_matched_video_moving_capturecast (self):
+        courses = read_test_courses()
+        testrec = get_test_recs()['capturecast']
+        clear_test_folder()
+        watch, unmatched, matched = generate_files([testrec])
+        old_path = testrec.filepath
+        assert os.path.exists(old_path)
+        pairs = match_courses_to_recordings(courses, watch)
+        new_path = get_new_filepath(pairs[0][0], pairs[0][1], matched)
+        move_video(pairs[0][0], new_path)
+        assert not os.path.exists(old_path)
+        assert os.path.exists(new_path)
+        assert new_path == pairs[0][0].filepath
+
+    def test_matched_video_moving_extron_large (self):
+        courses = read_test_courses()
+        testrec = get_test_recs()['extron']
+        clear_test_folder()
+        watch, unmatched, matched = generate_files([testrec], numBytes=10)
+        old_path = testrec.filepath
+        assert os.path.exists(old_path)
+        pairs = match_courses_to_recordings(courses, watch)
+        new_path = get_new_filepath(pairs[0][0], pairs[0][1], matched)
+        move_video(pairs[0][0], new_path)
+        assert not os.path.exists(old_path)
+        assert os.path.exists(new_path)
+        assert new_path == pairs[0][0].filepath

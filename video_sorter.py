@@ -181,7 +181,7 @@ def determine_semester(date: date):
     else:
         return f'Fall{year}'
 
-def get_or_create_class_folder(course: Course, rec: Recording):
+def get_or_create_class_folder(course: Course, rec: Recording, dest_folder: str):
     """
     Returns the file path of the folder where a recording should go 
     based on the recording date and course
@@ -191,7 +191,7 @@ def get_or_create_class_folder(course: Course, rec: Recording):
     semester = determine_semester(rec.date)
     
     # Creating the semester folder if it doesn't exist
-    semester_path = os.path.join(DESTINATION_FOLDER, semester)
+    semester_path = os.path.join(dest_folder, semester)
     os.makedirs(semester_path, exist_ok=True)
     
     # Creating the course folder inside the semester folder
@@ -206,13 +206,13 @@ def get_or_create_class_folder(course: Course, rec: Recording):
 
     return folder_path
 
-def get_new_filepath(rec: Recording, course: Course):
+def get_new_filepath(rec: Recording, course: Course, dest_folder: str):
     """
     Returns a new filepath for the recording based on the course it is assigned to.
 
     For example, LAW 5000_Beekhuizen_11-17-2023
     """
-    dest_folder = get_or_create_class_folder(course, rec)
+    dest_folder = get_or_create_class_folder(course, rec, dest_folder)
     
     # Convert the date to a more readable format
     readable_date = rec.date.strftime("%m-%d-%y")
@@ -285,19 +285,19 @@ def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tupl
 
     return pairs
 
-def move_files (pairs: list[tuple[Recording, Course or None]]):
+def move_files (pairs: list[tuple[Recording, Course or None]], dest_folder: str):
     """
     Given a list of recordings and their matching course, generate the new 
     file name and move the video to the correct folder.
     """
     for pair in pairs:
         if pair[1] is None:
-            move_unmatched_video(pair[0])
+            move_unmatched_video(pair[0], dest_folder)
         else:
-            new_path = get_new_filepath(pair[0], pair[1])
+            new_path = get_new_filepath(pair[0], pair[1], dest_folder)
             move_video(pair[0], new_path)
 
-def upload_files (pairs: list[tuple[Recording, Course or None]]):
+def upload_files (pairs: list[tuple[Recording, Course or None]], dest_folder: str):
     """
     Given a list of tuples containing Recordings and their corresponding Courses, 
     uploads files to Kaltura, and then sorts them into folders based on their course
@@ -311,7 +311,7 @@ def upload_files (pairs: list[tuple[Recording, Course or None]]):
         if pair[1] is not None:
             for i in enumerate(pair[1].instructors):
                 try:
-                    new_path = get_new_filepath(pair[0], pair[1])
+                    new_path = get_new_filepath(pair[0], pair[1], dest_folder)
                     new_name = os.path.basename(new_path).replace('.mp4', '')
                     upload_video(pair[0], pair[1], client, new_name, i)
                     logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
@@ -338,8 +338,9 @@ def process_existing_files(courses: list[Course], watch_path, mode):
 
 if __name__ == "__main__":
     WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
-    EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
     WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
+    DEST_FOLDER = os.path.normpath(config.get('Paths', 'dest_folder'))
+    EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
     MODE = os.path.normpath(config.get('Settings', 'mode'))
     LOG_FILE = config.get('Settings', 'log_file')
     
@@ -350,7 +351,7 @@ if __name__ == "__main__":
     courses = read_courses(EXCEL_FILE_PATH)
  
     # Process existing files immediately upon script start
-    process_existing_files(courses, WATCH_FOLDER, MODE)
+    process_existing_files(courses, WATCH_FOLDER, DEST_FOLDER, MODE)
     
     while True:
         current_time = datetime.now().time()
