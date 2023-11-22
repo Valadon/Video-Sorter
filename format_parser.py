@@ -39,14 +39,16 @@ def extron_2100_format_parser(filepath: str) -> LectureRecording or None:
     else:
         return None
     
-def manual_format_parser(filepath: str) -> LectureRecording or None:
+# CURRENTLY UNUSED
+def manual_format_parser(filepath: str) -> Recording or None:
     filename = os.path.basename(filepath)
-    pattern = r'((?:u\d{7} )+).+'
+    pattern = r'((?:u\d{7} )+)(.+)'
     match_pattern = re.match(pattern, filename)
 
     if match_pattern:
         unids, metadata = match_pattern.groups()
-        rec = LectureRecording(filepath, None, None, None, 'manual')
+        dt = datetime.fromtimestamp(os.stat().st_mtime)
+        rec = ManualRecording(filepath, 'manual', dt.date(), dt.time(), metadata, unids.split(' '))
         return rec
     else:
         return None

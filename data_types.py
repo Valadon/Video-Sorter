@@ -50,6 +50,12 @@ class Recording:
             return None
         return datetime(self.date.year, self.date.month, self.date.day, self.time.hour, self.time.minute, 0, 0)
     
+class ManualRecording(Recording):
+    def __init__(self, filepath: str, rec_device: str, date: date, time: time, metadata: str, unids: list[str]):
+        super().__init__(filepath, rec_device, date, time)
+        self.metadata = metadata
+        self.unids = unids
+
 class LectureRecording(Recording):
     def __init__(self, filepath: str, date: date, time: time, room_number: str, rec_device: str, course_number: str=None, section_number: str=None, course_code: str=None):
         super().__init__(filepath, rec_device, date, time)

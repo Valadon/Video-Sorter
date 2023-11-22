@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
+# CURRENTLY UNUSED
 def reap_files(target_dir: str, cutoff: datetime):
     """
     Deletes any files or directories older than the cutoff datetime
