@@ -11,6 +11,7 @@ from kaltura_uploader import *
 from data_types import *
 from format_parser import *
 from collections.abc import Callable
+from file_reaper import reap_files
 
 # Reading paths from config.ini
 config = configparser.ConfigParser()
@@ -322,6 +323,13 @@ def process_existing_files(courses: list[Course], watch_path, dest_path, mode):
     elif mode == 'Move':
         move_files(pairs, dest_path)
 
+    cutoff = datetime.now() - timedelta(weeks = 26)
+    logging.info(f'Reaping all files last modified before {cutoff.strftime("%m/%d/%Y, %H:%M:%S")}')
+    reaped_files = reap_files(dest_path, cutoff, commit=False)
+    for f in reaped_files:
+        logging.info(f'File deleted: {f}')
+    logging.info(f'Deleted {len(reap_files)} file(s)')
+
 if __name__ == "__main__":
     WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
     WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
@@ -346,7 +354,7 @@ if __name__ == "__main__":
         current_time = datetime.now().time()
         if current_time.hour == 3:
             logging.info("It's around 3 AM, time to sort the videos.")
-            process_existing_files(courses)
+            process_existing_files(courses, WATCH_FOLDER, DEST_FOLDER, MODE)
             sleep(3600)  # Sleep for 1 hour
         else:
             sleep(60)  # Sleep for 1 minute
