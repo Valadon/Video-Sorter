@@ -65,9 +65,10 @@ def generate_files (recs: list[LectureRecording], numBytes=4):
 
         filepath = os.path.join(watch_path, filename)
         rec.filepath = filepath
-        f = open(filepath, "wb")
-        f.write(bytes([0xFF for _ in range(numBytes)]))
-        f.close()
+        with open(filepath, "wb") as f:
+            f.write(bytes([0xFF for _ in range(numBytes)]))
+        ts = rec.get_datetime().timestamp() if rec.time else datetime(day=rec.date.day, month=rec.date.month, year=rec.date.year).timestamp()
+        os.utime(filepath, (ts, ts))
 
     return (watch_path, destination_path)
 
@@ -79,6 +80,7 @@ def get_test_recs ():
         'extron': LectureRecording(None, date(2023, 11, 14), time(14, 28), 4603, 'extron'),
         'extron_2100': LectureRecording(None, date(2023, 11, 13), time(13, 32), 2100, 'extron_2100'),
         'capturecast': LectureRecording(None, date(2023, 11, 14), None, None, 'capturecast', '4560', '1', 'LAW'),
+        'capturecast_old': LectureRecording(None, date(2022, 10, 5), None, None, 'capturecast', '4560', '1', 'LAW'),
         'extron_invalid': LectureRecording(None, date(2023, 11, 14), time(10, 28), 4603, 'extron'),
     }
 
@@ -215,12 +217,13 @@ class TestSorter:
         assert os.path.exists(new_path)
         assert new_path == pairs[0][0].filepath
 
-    def test_move_integration (self):
+    def test_process_existing (self):
         courses = read_test_courses()
         recdict = get_test_recs()
-        testrects = [recdict['extron'], recdict['extron_2100'], recdict['capturecast'], recdict['extron_invalid']]
+        testrects = [recdict['extron'], recdict['extron_2100'], recdict['capturecast'], recdict['extron_invalid'], recdict['capturecast_old']]
         clear_test_folder()
         watch, destination = generate_files(testrects)
+        assert count_nondirectory_files(watch) == 5
         old_paths = []
         for rec in testrects:
             assert os.path.exists(rec.filepath)
@@ -231,6 +234,7 @@ class TestSorter:
         assert count_nondirectory_files(destination) == 4
         assert count_nondirectory_files(os.path.join(destination, 'Unmatched_Videos')) == 1
         assert count_nondirectory_files(os.path.join(destination, 'Fall23')) == 3
+        assert not os.path.exists(os.path.join(destination, 'Fall22'))
 
 def create_files_with_mod_date (dest_folder: str, pairs: list[tuple[str, datetime]]): 
     created = []

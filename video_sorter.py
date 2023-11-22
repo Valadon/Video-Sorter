@@ -311,7 +311,7 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
             move_unmatched_video(pair[0], dest_folder)
 
 
-def process_existing_files(courses: list[Course], watch_path, dest_path, mode):
+def process_existing_files(courses: list[Course], watch_path, dest_path, mode, weeks_before_deletion=26):
     """
     Given a list of courses and file path on which to watch for 
     videos, processes videos accord to what mode has been set 
@@ -323,12 +323,12 @@ def process_existing_files(courses: list[Course], watch_path, dest_path, mode):
     elif mode == 'Move':
         move_files(pairs, dest_path)
 
-    cutoff = datetime.now() - timedelta(weeks = 26)
+    cutoff = datetime.now() - timedelta(weeks = weeks_before_deletion)
     logging.info(f'Reaping all files last modified before {cutoff.strftime("%m/%d/%Y, %H:%M:%S")}')
-    reaped_files = reap_files(dest_path, cutoff, commit=False)
+    reaped_files = reap_files(dest_path, cutoff, commit=True)
     for f in reaped_files:
         logging.info(f'File deleted: {f}')
-    logging.info(f'Deleted {len(reap_files)} file(s)')
+    logging.info(f'Deleted {len(reaped_files)} file(s)')
 
 if __name__ == "__main__":
     WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
@@ -337,6 +337,7 @@ if __name__ == "__main__":
     EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
     MODE = os.path.normpath(config.get('Settings', 'mode'))
     LOG_FILE = config.get('Settings', 'log_file')
+    WEEKS_BEFORE_DELETION = config.getint('Settings', 'weeks_before_deletion')
 
     print(f'See {LOG_FILE} for logs')
     
@@ -346,15 +347,14 @@ if __name__ == "__main__":
     logging.info('\n\nStarting the video sorter\n')
 
     courses = read_courses(EXCEL_FILE_PATH)
- 
-    # Process existing files immediately upon script start
-    process_existing_files(courses, WATCH_FOLDER, DEST_FOLDER, MODE)
+    has_processed_videos = False
     
     while True:
         current_time = datetime.now().time()
-        if current_time.hour == 3:
+        if current_time.hour == 3 or not has_processed_videos:
             logging.info("It's around 3 AM, time to sort the videos.")
-            process_existing_files(courses, WATCH_FOLDER, DEST_FOLDER, MODE)
+            process_existing_files(courses, WATCH_FOLDER, DEST_FOLDER, MODE, WEEKS_BEFORE_DELETION)
+            has_processed_videos = True
             sleep(3600)  # Sleep for 1 hour
         else:
             sleep(60)  # Sleep for 1 minute
