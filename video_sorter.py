@@ -118,8 +118,6 @@ def parse_recording_file(filepath: str) -> LectureRecording:
     
     return LectureRecording(filepath, None, None, None, None)
 
-
-
 def find_course_by_room_and_datetime(courses: list[Course], rec: LectureRecording) -> Course:
     """
     Finds the course in the given list which has a matching room, 

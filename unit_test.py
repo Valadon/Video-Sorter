@@ -5,6 +5,7 @@ config.read('config.ini')
 
 from data_types import *
 from video_sorter import read_courses, match_courses_to_recordings, move_video, get_new_filepath, process_existing_files
+from file_reaper import reap_files
 
 def clear_directory(directory_path):
     try:
@@ -230,3 +231,80 @@ class TestSorter:
         assert count_nondirectory_files(destination) == 4
         assert count_nondirectory_files(os.path.join(destination, 'Unmatched_Videos')) == 1
         assert count_nondirectory_files(os.path.join(destination, 'Fall23')) == 3
+
+def create_files_with_mod_date (dest_folder: str, pairs: list[tuple[str, datetime]]): 
+    created = []
+    for pair in pairs:
+        path = os.path.join(dest_folder, pair[0])
+        with open(path, 'w') as file:
+            file.write('A')
+        ts = pair[1].timestamp()
+        os.utime(path, (ts, ts))
+        created.append(path)
+
+    return created
+
+class TestReaper:
+    def setup_directory(self):
+        test_dir = os.path.join(config.get('Paths', 'test_folder'))
+        work_path = os.path.join(test_dir, 'REAPERTESTS')
+        if not os.path.exists(work_path):
+            os.mkdir(work_path)
+        clear_directory(work_path)
+        return work_path
+    
+    def test_reap_old_files(self):
+        dest = self.setup_directory()
+        files = create_files_with_mod_date(dest, [
+            ('barely', datetime(2023, 5, 22, 11, 59, 00)),
+            ('byawidemargin', datetime(2022, 6, 22, 13, 25, 00))
+        ])
+        assert count_nondirectory_files(dest) == 2
+        reap_files(dest, datetime(2023, 5, 22, 12, 00))
+        assert count_nondirectory_files(dest) == 0
+
+    def test_no_reap_new_files(self):
+        dest = self.setup_directory()
+        files = create_files_with_mod_date(dest, [
+            ('barely', datetime(2023, 5, 22, 12, 1, 00)),
+            ('byawidemargin', datetime(2023, 11, 23, 4, 45))
+        ])
+        assert count_nondirectory_files(dest) == 2
+        reap_files(dest, datetime(2023, 5, 22, 12, 00))
+        assert count_nondirectory_files(dest) == 2
+
+    def test_reap_mixed(self):
+        dest = self.setup_directory()
+        files = create_files_with_mod_date(dest, [
+            ('tooold', datetime(2023, 4, 21, 6, 34, 32)),
+            ('newenough', datetime(2023, 6, 1, 15, 43))
+        ])
+        assert count_nondirectory_files(dest) == 2
+        reap_files(dest, datetime(2023, 5, 22, 12, 00))
+        assert count_nondirectory_files(dest) == 1
+        assert not os.path.exists(files[0])
+        assert os.path.exists(files[1])
+
+    def test_reap_dirs(self):
+        dest = self.setup_directory()
+        folder_to_delete = os.path.join(dest, 'DELETE')
+        folder_to_keep = os.path.join(dest, 'KEEP')
+        os.mkdir(folder_to_delete)
+        os.mkdir(folder_to_keep)
+        delete_folder_files = create_files_with_mod_date(folder_to_delete, [
+            ('shouldbedeleted', datetime(2020, 5, 6, 6, 45, 10)),
+        ])
+        keep_folder_files = create_files_with_mod_date(folder_to_keep, [
+            ('shouldbedeleted', datetime(2020, 1, 4, 15, 59, 17)),
+            ('shouldbekept', datetime(2023, 8, 4, 15, 59, 17))
+        ])
+        files = create_files_with_mod_date(dest, [
+            ('tooold', datetime(2023, 4, 21, 6, 34, 32)),
+            ('newenough', datetime(2023, 6, 1, 15, 43))
+        ])
+        assert count_nondirectory_files(dest) == 5
+        reap_files(dest, datetime(2023, 5, 22, 12, 00))
+        assert count_nondirectory_files(dest) == 2
+        assert not os.path.exists(folder_to_delete)
+        assert os.path.exists(folder_to_keep)
+        assert count_nondirectory_files(folder_to_keep) == 1
