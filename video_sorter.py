@@ -325,10 +325,13 @@ def process_existing_files(courses: list[Course], watch_path, dest_path, mode, w
 
     cutoff = datetime.now() - timedelta(weeks = weeks_before_deletion)
     logging.info(f'Reaping all files last modified before {cutoff.strftime("%m/%d/%Y, %H:%M:%S")}')
-    reaped_files = reap_files(dest_path, cutoff, commit=True)
-    for f in reaped_files:
-        logging.info(f'File deleted: {f}')
-    logging.info(f'Deleted {len(reaped_files)} file(s)')
+    try:
+        reaped_files = reap_files(dest_path, cutoff)
+        for f in reaped_files:
+            logging.info(f'File deleted: {f}')
+        logging.info(f'Deleted {len(reaped_files)} file(s)')
+    except Exception as e:
+        logging.error(f'Error occurred while reaping files: {e}')
 
 if __name__ == "__main__":
     WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
