@@ -38,7 +38,7 @@ def clear_test_folder ():
     test_folder = config.get('Paths', 'test_folder')
     clear_directory(test_folder)
 
-def generate_files (recs: list[Recording], numBytes=4):
+def generate_files (recs: list[LectureRecording], numBytes=4):
     test_folder = config.get('Paths', 'test_folder')
 
     watch_path = os.path.join(test_folder, 'WATCH')
@@ -75,10 +75,10 @@ def read_test_courses ():
 
 def get_test_recs ():
     return {
-        'extron': Recording(None, date(2023, 11, 14), time(14, 28), 4603, 'extron'),
-        'extron_2100': Recording(None, date(2023, 11, 13), time(13, 32), 2100, 'extron_2100'),
-        'capturecast': Recording(None, date(2023, 11, 14), None, None, 'capturecast', '4560', '1', 'LAW'),
-        'extron_invalid': Recording(None, date(2023, 11, 14), time(10, 28), 4603, 'extron'),
+        'extron': LectureRecording(None, date(2023, 11, 14), time(14, 28), 4603, 'extron'),
+        'extron_2100': LectureRecording(None, date(2023, 11, 13), time(13, 32), 2100, 'extron_2100'),
+        'capturecast': LectureRecording(None, date(2023, 11, 14), None, None, 'capturecast', '4560', '1', 'LAW'),
+        'extron_invalid': LectureRecording(None, date(2023, 11, 14), time(10, 28), 4603, 'extron'),
     }
 
 class TestSorter:
@@ -88,7 +88,7 @@ class TestSorter:
         for i, course in enumerate(courses):
             assert course.name == f'Course{i+1}'
             assert course.instructor_last == lastnames[i]
-            for ins in course.instructors:
+            for ins in course.hosts:
                 assert ins.last in lastnames[i]
 
     def test_valid_extron_sorting (self):
@@ -130,16 +130,16 @@ class TestSorter:
     def test_get_user_alphabetical (self):
         courses = read_test_courses()
         for x in courses:
-            if len(x.instructors) == 2:
-                assert x.get_first_instructor_alphabetically().last == 'FINCH'
+            if len(x.hosts) == 2:
+                assert x.get_first_host_alphabetically().last == 'FINCH'
 
     def test_instructor_import (self):
         courses = read_test_courses()
-        assert courses[0].instructors[0].last == 'BEEKHUIZEN'
-        assert courses[2].instructors[0].last == 'FINCH'
-        assert courses[2].instructors[1].last == 'MORALES'
+        assert courses[0].hosts[0].last == 'BEEKHUIZEN'
+        assert courses[2].hosts[0].last == 'FINCH'
+        assert courses[2].hosts[1].last == 'MORALES'
         for c in courses:
-            for i in c.instructors:
+            for i in c.hosts:
                 assert len(i.unid) == 8
                 assert i.unid[0] == 'u'
 

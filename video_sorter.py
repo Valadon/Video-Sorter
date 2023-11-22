@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, date, time
 import configparser
 from kaltura_uploader import *
 from data_types import *
+from format_parser import *
+from collections.abc import Callable
 
 # Reading paths from config.ini
 config = configparser.ConfigParser()
@@ -63,7 +65,7 @@ def read_courses(excel_path) -> list[Course]:
         for s in instructorStrings:
             instructorMatch = re.search(r'([^(),\d]+),\s*([^()\d]+)\s+\((\d{8})\);*\s*', s)
             groups = instructorMatch.groups()
-            instructors.append(Instructor(groups[1], groups[0], groups[2]))
+            instructors.append(EventHost(groups[1], groups[0], groups[2]))
 
 
         # Extract and store the section number
@@ -84,7 +86,7 @@ def read_courses(excel_path) -> list[Course]:
         
     return courses
 
-def find_course_by_number_and_section(courses: list[Course], rec: Recording) -> Course:
+def find_course_by_number_and_section(courses: list[Course], rec: LectureRecording) -> Course:
     """
     Finds the course in the list whose number and section matches the 
     one in the given recording object
@@ -99,44 +101,26 @@ def find_course_by_number_and_section(courses: list[Course], rec: Recording) -> 
     # Return None if no match is found
     return None
 
-def parse_recording_file(filepath: str) -> Recording:
+def parse_recording_file(filepath: str) -> LectureRecording:
     """
     Parses a recording filename and puts that information into a recording object
     """
-    filename = os.path.basename(filepath)
+    parsers: list[Callable[[str], LectureRecording or None]] = (
+        extron_format_parser,
+        capturecast_format_parser,
+        extron_2100_format_parser
+    )
 
-    # Existing filename patterns
-    extron_pattern = r'(\d+)_Rec\d+_.*?_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
-    extron_2100_pattern = r'SMP-2100_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
-    capturecast_pattern = r'(\w+)-(\d+)-(\d+)---(\d{1,2})-(\d{1,2})-(\d{4}).mp4'
+    for parser in parsers:
+        rec = parser(filepath)
+        if rec is not None:
+            return rec
     
-    # Matching existing patterns
-    match_extron = re.match(extron_pattern, filename)
-    match_extron_2100 = re.match(extron_2100_pattern, filename)
-    match_capturecast = re.match(capturecast_pattern, filename)
-    
-    if match_extron:
-        room_number, rec_date, rec_time = match_extron.groups()
-        dt = datetime.strptime(f'{rec_date}{rec_time}', '%Y%m%d%H%M%S')
-        rec = Recording(filepath, dt.date(), dt.time(), room_number, 'extron')
-        return rec
-    if match_extron_2100:
-        rec_date, rec_time = match_extron_2100.groups()
-        room_number = '2100'
-        dt = datetime.strptime(f'{rec_date}{rec_time}', '%Y%m%d%H%M%S')
-        rec = Recording(filepath, dt.date(), dt.time(), room_number, 'extron_2100')
-        return rec
-    if match_capturecast:
-        course_code, course_number, section_number, month, day, year = match_capturecast.groups()
-        rec_date = date(int(year), int(month), int(day))
-        rec = Recording(filepath, rec_date, None, None, 'capturecast', course_number, section_number, course_code)
-        return rec
-    
-    return Recording(filepath, None, None, None, None)
+    return LectureRecording(filepath, None, None, None, None)
 
 
 
-def find_course_by_room_and_datetime(courses: list[Course], rec: Recording) -> Course:
+def find_course_by_room_and_datetime(courses: list[Course], rec: LectureRecording) -> Course:
     """
     Finds the course in the given list which has a matching room, 
     date and time to the given recording
@@ -182,7 +166,7 @@ def determine_semester(date: date):
     else:
         return f'Fall{year}'
 
-def get_or_create_class_folder(course: Course, rec: Recording, dest_folder: str):
+def get_or_create_class_folder(course: Course, rec: LectureRecording, dest_folder: str):
     """
     Returns the file path of the folder where a recording should go 
     based on the recording date and course
@@ -207,7 +191,7 @@ def get_or_create_class_folder(course: Course, rec: Recording, dest_folder: str)
 
     return folder_path
 
-def get_new_filepath(rec: Recording, course: Course, dest_folder: str):
+def get_new_filepath(rec: LectureRecording, course: Course, dest_folder: str):
     """
     Returns a new filepath for the recording based on the course it is assigned to.
 
@@ -230,7 +214,7 @@ def get_new_filepath(rec: Recording, course: Course, dest_folder: str):
 
     return full_path
 
-def move_video(rec: Recording, dest_path):
+def move_video(rec: LectureRecording, dest_path):
     """
     Moves a recording to the given destination
     """
@@ -241,7 +225,7 @@ def move_video(rec: Recording, dest_path):
     except Exception as e:
         logging.error(f"An error occurred while moving {rec}: {e}")
 
-def move_unmatched_video(rec: Recording, dest_folder):
+def move_unmatched_video(rec: LectureRecording, dest_folder):
     """
     Moves a recording to the unmatched videos location specified in the config
     """
@@ -255,7 +239,7 @@ def move_unmatched_video(rec: Recording, dest_folder):
     except Exception as e:
         logging.info(f"An error occurred while moving file: {e}")
 
-def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tuple[Recording, Course or None]]:
+def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tuple[LectureRecording, Course or None]]:
     """
     Looks for videos in the watch path and tries to figure out which 
     course in the given list it was for. Returns a list of tuples
@@ -287,7 +271,7 @@ def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tupl
 
     return pairs
 
-def move_files (pairs: list[tuple[Recording, Course or None]], dest_folder: str):
+def move_files (pairs: list[tuple[LectureRecording, Course or None]], dest_folder: str):
     """
     Given a list of recordings and their matching course, generate the new 
     file name and move the video to the correct folder.
@@ -298,10 +282,10 @@ def move_files (pairs: list[tuple[Recording, Course or None]], dest_folder: str)
         else:
             new_path = get_new_filepath(pair[0], pair[1], dest_folder)
             move_video(pair[0], new_path)
-            for ins in pair[1].instructors:
+            for ins in pair[1].hosts:
                 logging.debug(f'Video moved for {ins}')
 
-def upload_files (pairs: list[tuple[Recording, Course or None]], dest_folder: str):
+def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_folder: str):
     """
     Given a list of tuples containing Recordings and their corresponding Courses, 
     uploads files to Kaltura, and then sorts them into folders based on their course
@@ -313,7 +297,7 @@ def upload_files (pairs: list[tuple[Recording, Course or None]], dest_folder: st
         return
     for pair in pairs:
         if pair[1] is not None:
-            for i, insr in enumerate(pair[1].instructors):
+            for i, insr in enumerate(pair[1].hosts):
                 try:
                     new_path = get_new_filepath(pair[0], pair[1], dest_folder)
                     new_name = os.path.basename(new_path).replace('.mp4', '')

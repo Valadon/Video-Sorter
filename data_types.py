@@ -1,7 +1,7 @@
 from datetime import date, time, datetime
 import os
 
-class Instructor:
+class EventHost:
     def __init__(self, first, last, unid_zero_prefix):
         self.first = first
         self.last = last
@@ -11,36 +11,35 @@ class Instructor:
         return f'{self.first} {self.last}'
 
     def __str__(self) -> str:
-        return f'Instructor(name={self.full()}, unid={self.unid})'
+        return f'Host(name={self.full()}, unid={self.unid})'
 
-class Course:
-    def __init__(self, number: str, section: str, name: str, instructor_last: str, room_number: str, days: set[str], start_time: time, instructors: list[Instructor]):
+class Event:
+    def __init__(self, start_time: time, hosts: list[EventHost]):
+        self.start_time = start_time
+        self.hosts = hosts
+
+class Course(Event):
+    def __init__(self, number: str, section: str, name: str, instructor_last: str, room_number: str, days: set[str], start_time: time, instructors: list[EventHost]):
+        super().__init__(start_time, instructors)
         self.number = number
         self.section_number = section
         self.name = name
         self.instructor_last = instructor_last
         self.room_number = room_number
         self.days = days
-        self.start_time = start_time
-        self.instructors = instructors
 
-    def get_first_instructor_alphabetically (self) -> Instructor:
-        return sorted(self.instructors, key=lambda x : x.last + x.first)[0]
+    def get_first_host_alphabetically (self) -> EventHost:
+        return sorted(self.hosts, key=lambda x : x.last + x.first)[0]
 
     def __str__(self) -> str:
         return f"Course(title={self.number}-{self.section_number} {self.name}, room_number={self.room_number}, days={self.days}, time={self.start_time})"
 
-    
 class Recording:
-    def __init__(self, filepath: str, date: date, time: time, room_number: str, rec_device:str, course_number: str=None, section_number: str=None, course_code: str=None):
+    def __init__(self, filepath: str, rec_device: str, date: date, time: time):
         self.filepath = filepath
+        self.rec_device = rec_device
         self.date = date
         self.time = time
-        self.room_number = room_number
-        self.rec_device = rec_device
-        self.course_number = course_number
-        self.section_number = section_number
-        self.course_code = course_code
 
     @property
     def filename (self):
@@ -50,6 +49,14 @@ class Recording:
         if self.time is None:
             return None
         return datetime(self.date.year, self.date.month, self.date.day, self.time.hour, self.time.minute, 0, 0)
+    
+class LectureRecording(Recording):
+    def __init__(self, filepath: str, date: date, time: time, room_number: str, rec_device: str, course_number: str=None, section_number: str=None, course_code: str=None):
+        super().__init__(filepath, rec_device, date, time)
+        self.room_number = room_number
+        self.course_number = course_number
+        self.section_number = section_number
+        self.course_code = course_code
         
     def was_scheduled (self):
         return not ((self.room_number is None) and (self.date is None) and (self.time))
