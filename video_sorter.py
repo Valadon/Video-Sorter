@@ -14,7 +14,7 @@ from data_types import *
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-RECORDING_START_TOLERANCE = timedelta(minutes=30)
+RECORDING_START_TOLERANCE = timedelta(minutes=config.getint('Settings', 'start_time_tolerance'))
    
 # Read course details from the Excel sheet into the global 'courses' list
 def read_courses(excel_path) -> list[Course]:
@@ -347,9 +347,12 @@ if __name__ == "__main__":
     EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
     MODE = os.path.normpath(config.get('Settings', 'mode'))
     LOG_FILE = config.get('Settings', 'log_file')
+
+    print(f'See {LOG_FILE} for logs')
     
     # Initialize logging
-    logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename=LOG_FILE, level=logging.DEBUG)
+    log_level = logging.getLevelNamesMapping()[config.get('Settings', 'log_level')]
+    logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename=LOG_FILE, level=log_level)
     logging.info('\n\nStarting the video sorter\n')
 
     courses = read_courses(EXCEL_FILE_PATH)
