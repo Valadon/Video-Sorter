@@ -255,7 +255,7 @@ class TestReaper:
     
     def test_reap_old_files(self):
         dest = self.setup_directory()
-        files = create_files_with_mod_date(dest, [
+        create_files_with_mod_date(dest, [
             ('barely', datetime(2023, 5, 22, 11, 59, 00)),
             ('byawidemargin', datetime(2022, 6, 22, 13, 25, 00))
         ])
@@ -265,7 +265,7 @@ class TestReaper:
 
     def test_no_reap_new_files(self):
         dest = self.setup_directory()
-        files = create_files_with_mod_date(dest, [
+        create_files_with_mod_date(dest, [
             ('barely', datetime(2023, 5, 22, 12, 1, 00)),
             ('byawidemargin', datetime(2023, 11, 23, 4, 45))
         ])
@@ -291,14 +291,14 @@ class TestReaper:
         folder_to_keep = os.path.join(dest, 'KEEP')
         os.mkdir(folder_to_delete)
         os.mkdir(folder_to_keep)
-        delete_folder_files = create_files_with_mod_date(folder_to_delete, [
+        create_files_with_mod_date(folder_to_delete, [
             ('shouldbedeleted', datetime(2020, 5, 6, 6, 45, 10)),
         ])
-        keep_folder_files = create_files_with_mod_date(folder_to_keep, [
+        create_files_with_mod_date(folder_to_keep, [
             ('shouldbedeleted', datetime(2020, 1, 4, 15, 59, 17)),
             ('shouldbekept', datetime(2023, 8, 4, 15, 59, 17))
         ])
-        files = create_files_with_mod_date(dest, [
+        create_files_with_mod_date(dest, [
             ('tooold', datetime(2023, 4, 21, 6, 34, 32)),
             ('newenough', datetime(2023, 6, 1, 15, 43))
         ])
