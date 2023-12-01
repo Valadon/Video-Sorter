@@ -40,7 +40,7 @@ def extron_2100_format_parser(filepath: str) -> LectureRecording or None:
         return None
     
 # CURRENTLY UNUSED
-def manual_format_parser(filepath: str) -> Recording or None:
+def manual_format_parser(filepath: str) -> ManualRecording or None:
     filename = os.path.basename(filepath)
     pattern = r'((?:u\d{7} )+)(.+)'
     match_pattern = re.match(pattern, filename)

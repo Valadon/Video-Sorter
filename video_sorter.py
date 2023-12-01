@@ -225,7 +225,7 @@ def move_video(rec: LectureRecording, dest_path):
     except Exception as e:
         logging.error(f"An error occurred while moving {rec}: {e}")
 
-def move_unmatched_video(rec: LectureRecording, dest_folder):
+def move_unmatched_video(rec: Recording, dest_folder):
     """
     Moves a recording to the unmatched videos location specified in the config
     """
@@ -271,21 +271,36 @@ def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tupl
 
     return pairs
 
-def move_files (pairs: list[tuple[LectureRecording, Course or None]], dest_folder: str):
+def move_files (pairs: list[tuple[Recording, Course or None]], dest_folder: str):
     """
     Given a list of recordings and their matching course, generate the new 
     file name and move the video to the correct folder.
     """
     for pair in pairs:
         if pair[1] is None:
-            move_unmatched_video(pair[0], dest_folder)
+            if type(pair[0]) == 'ManualRecording':
+                new_path = os.makedirs(os.path.join(dest_folder, 'Manual Recordings'))
+                move_video(pair[0], new_path)
+            else:
+                move_unmatched_video(pair[0], dest_folder)
         else:
             new_path = get_new_filepath(pair[0], pair[1], dest_folder)
             move_video(pair[0], new_path)
             for ins in pair[1].hosts:
                 logging.debug(f'Video moved for {ins}')
 
-def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_folder: str):
+
+def get_kaltura_name (rec: Recording, course: Course or None, dest_folder):
+    new_name = ''
+    if type(rec) == 'ManualRecording':
+        man_rec: ManualRecording = rec
+        unid_part = ' '.join(man_rec.unids) + ' '
+        new_name = man_rec.filename.replace(unid_part, '')
+    else:
+        new_name = os.path.basename(new_path).replace('.mp4', '')
+    return new_name
+
+def upload_files (pairs: list[tuple[Recording, Event or None]], dest_folder: str):
     """
     Given a list of tuples containing Recordings and their corresponding Courses, 
     uploads files to Kaltura, and then sorts them into folders based on their course
@@ -299,8 +314,7 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
         if pair[1] is not None:
             for i, insr in enumerate(pair[1].hosts):
                 try:
-                    new_path = get_new_filepath(pair[0], pair[1], dest_folder)
-                    new_name = os.path.basename(new_path).replace('.mp4', '')
+                    new_name = get_kaltura_name(pair[0], pair[1], dest_folder)
                     upload_video(pair[0], pair[1], client, new_name, i)
                     logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
                 except Exception as e:
@@ -312,7 +326,7 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
             move_unmatched_video(pair[0], dest_folder)
 
 
-def process_existing_files(courses: list[Course], watch_path, dest_path, mode, weeks_before_deletion=26):
+def process_existing_files(courses: list[Event], watch_path, dest_path, mode, weeks_before_deletion=26):
     """
     Given a list of courses and file path on which to watch for 
     videos, processes videos accord to what mode has been set 
