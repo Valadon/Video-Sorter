@@ -59,7 +59,7 @@ def read_courses(excel_path) -> list[Course]:
             start_time_str = start_time_str.replace('am', 'AM').replace('pm', 'PM')
             start_time = datetime.strptime(start_time_str, '%I:%M%p' if ':' in start_time_str else '%I%p').time()
         else:
-            logging.warning(f"Invalid start time found for course {row['Course']}. Skipping.")
+            logging.info(f"Invalid start time found for course {row['Course']}. Skipping.")
 
         instructors = []
         instructorStrings = row['Instructor'].split('; ')
