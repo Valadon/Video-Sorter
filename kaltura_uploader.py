@@ -38,7 +38,7 @@ def upload_video (rec: LectureRecording, course: Course, kaltura_client: Kaltura
     ## Step 3: Create a media entry
     mediaEntry = KalturaMediaEntry()
     mediaEntry.name = kaltura_name
-    mediaEntry.description = f'Class recording for {course.number} {course.name} on {rec.date.strftime("%d-%m-%Y")}'
+    mediaEntry.description = f'Class recording for {course.course_number_full} {course.name} on {rec.date.strftime("%d-%m-%Y")}'
     mediaEntry.mediaType = KalturaMediaType.VIDEO
     if instructorIndex == -1:
         mediaEntry.userId = course.get_first_host_alphabetically().unid

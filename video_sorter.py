@@ -74,7 +74,7 @@ def read_courses(excel_path) -> list[Course]:
 
         course = Course(
             row['Course'],
-            str(section_number),
+            str(int(section_number)),
             row['Course Title'],
             instructor,
             str(row['Room (cleaned)']),
@@ -96,7 +96,7 @@ def find_course_by_number_and_section(courses: list[Course], rec: LectureRecordi
 
     # Iterate through the courses list and look for a match
     for course in courses:
-        if course.number == rec.course_number_full() and course.section_number == rec.section_number:
+        if course.course_number_full == rec.course_number_full() and course.section_number == rec.section_number:
             return course
 
     # Return None if no match is found
@@ -179,7 +179,7 @@ def get_or_create_class_folder(course: Course, rec: LectureRecording, dest_folde
     os.makedirs(semester_path, exist_ok=True)
     
     # Creating the course folder inside the semester folder
-    folder_name = f"{course.number}_{course.name}_{course.instructor_last}".replace('&', '')
+    folder_name = f"{course.course_number_full}_{course.name}_{course.instructor_last}".replace('&', '')
     folder_path = os.path.join(semester_path, folder_name)
     folder_path = os.path.abspath(folder_path)  # Use absolute path
     try:
@@ -253,18 +253,15 @@ def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tupl
         filepath = os.path.join(watch_path, filename)
         rec = parse_recording_file(filepath)
 
-        if rec.was_scheduled():
-            logging.info(rec)
-            
-            if rec.time is None:
-                course = find_course_by_number_and_section(courses, rec)
-            else:
-                course = find_course_by_room_and_datetime(courses, rec)
+        logging.info(rec)
+        
+        if rec.time is None:
+            course = find_course_by_number_and_section(courses, rec)
+        else:
+            course = find_course_by_room_and_datetime(courses, rec)
 
-            if course is not None:
-                pairs.append((rec, course))
-            else:
-                pairs.append((rec, None))
+        if course is not None:
+            pairs.append((rec, course))
         else:
             pairs.append((rec, None))
 

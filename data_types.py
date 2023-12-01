@@ -21,7 +21,7 @@ class Event:
 class Course(Event):
     def __init__(self, number: str, section: str, name: str, instructor_last: str, room_number: str, days: set[str], start_time: time, instructors: list[EventHost]):
         super().__init__(start_time, instructors)
-        self.number = number
+        self.course_number_full = number
         self.section_number = section
         self.name = name
         self.instructor_last = instructor_last
@@ -32,7 +32,7 @@ class Course(Event):
         return sorted(self.hosts, key=lambda x : x.last + x.first)[0]
 
     def __str__(self) -> str:
-        return f"Course(title={self.number}-{self.section_number} {self.name}, room_number={self.room_number}, days={self.days}, time={self.start_time})"
+        return f"Course(title={self.course_number_full}-{self.section_number} {self.name}, room_number={self.room_number}, days={self.days}, time={self.start_time})"
 
 class Recording:
     def __init__(self, filepath: str, rec_device: str, date: date, time: time):
@@ -63,9 +63,6 @@ class LectureRecording(Recording):
         self.course_number = course_number
         self.section_number = section_number
         self.course_code = course_code
-        
-    def was_scheduled (self):
-        return not ((self.room_number is None) and (self.date is None) and (self.time))
     
     def course_number_full(self):
         if self.course_code is None or self.course_number is None:
