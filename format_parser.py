@@ -15,7 +15,7 @@ def extron_format_parser(filepath: str) -> LectureRecording or None:
     
 def capturecast_format_parser(filepath: str) -> LectureRecording or None:
     filename = os.path.basename(filepath)
-    capturecast_pattern = r'(\w+)-(\d+)-(\d+)---(\d{1,2})-(\d{1,2})-(\d{4}).mp4'
+    capturecast_pattern = r'(\w+)-(\d+)-(\d+)---(\d{1,2})-(\d{1,2})-(\d{4}).*.mp4'
     match_capturecast = re.match(capturecast_pattern, filename)
     if match_capturecast:
         course_code, course_number, section_number, month, day, year = match_capturecast.groups()

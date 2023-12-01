@@ -31,13 +31,12 @@ def read_courses(excel_path) -> list[Course]:
     df = df.dropna(how='all')
     for index, row in df.iterrows():
         instructor = str(row['Instructor LAST']).replace(' & ', ' ') if pd.notna(row['Instructor LAST']) else ''
-        days_pattern = re.findall(r'M|TTh|T|W|F|Sa', str(row['Meeting Pattern']))
+        days_pattern = re.findall(r'M|Th|T|W|F|Sa', str(row['Meeting Pattern']))
         days = set()  # Define the days list here
         for day_pattern in days_pattern:
             if day_pattern == 'M':
                 days.add('Monday')
-            elif day_pattern == 'TTh':
-                days.add('Tuesday')
+            elif day_pattern == 'Th':
                 days.add('Thursday')
             elif day_pattern == 'T':
                 days.add('Tuesday')
