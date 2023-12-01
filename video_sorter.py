@@ -3,6 +3,7 @@ import os
 import re
 from time import sleep
 import logging
+import logging.handlers
 import shutil
 import pandas as pd
 from datetime import datetime, timedelta, date, time
@@ -233,10 +234,10 @@ def move_unmatched_video(rec: LectureRecording, dest_folder):
     dest_path = os.path.join(unmatched_folder, os.path.basename(rec.filepath))
     try:
         shutil.move(rec.filepath, dest_path)
-        logging.info(f"No course matched for {rec}. Moved to {unmatched_folder}")
+        logging.warning(f"No course matched for {rec}. Moved to {unmatched_folder}")
         rec.filepath = dest_path
     except Exception as e:
-        logging.info(f"An error occurred while moving file: {e}")
+        logging.error(f"An error occurred while moving file: {e}")
 
 def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tuple[LectureRecording, Course or None]]:
     """
@@ -318,10 +319,13 @@ def process_existing_files(courses: list[Course], watch_path, dest_path, mode, w
     in the config file.
     """
     pairs = match_courses_to_recordings(courses, watch_path)
-    if mode == 'Upload':
-        upload_files(pairs, dest_path)
-    elif mode == 'Move':
-        move_files(pairs, dest_path)
+    if len(pairs) > 0:
+        if mode == 'Upload':
+            upload_files(pairs, dest_path)
+        elif mode == 'Move':
+            move_files(pairs, dest_path)
+    else:
+        logging.info("No new videos to sort")
 
     cutoff = datetime.now() - timedelta(weeks = weeks_before_deletion)
     logging.info(f'Reaping all files last modified before {cutoff.strftime("%m/%d/%Y, %H:%M:%S")}')
@@ -348,6 +352,19 @@ if __name__ == "__main__":
     log_level = logging.getLevelNamesMapping()[config.get('Settings', 'log_level')]
     logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename=LOG_FILE, level=log_level)
     logging.info('\n\nStarting the video sorter\n')
+
+    # Get the emails for logging
+    emails = []
+    COUNT = config.getint('LoggingEmails', 'to_count')
+    for i in range(COUNT):
+        emails.append(config.get('LoggingEmails', f'to_email_{i}'))
+
+    HOST = config.get('LoggingEmails', 'outbound_server')
+    FROM = config.get('LoggingEmails', 'from_address')
+    smtp_level = logging.getLevelNamesMapping()[config.get('LoggingEmails', 'level')]
+    smtp_handler = logging.handlers.SMTPHandler(HOST, FROM, emails, config.get('LoggingEmails', 'subject'))
+    smtp_handler.setLevel(smtp_level)
+    logging.getLogger().addHandler(smtp_handler)
 
     courses = read_courses(EXCEL_FILE_PATH)
     has_processed_videos = False

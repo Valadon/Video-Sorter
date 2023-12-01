@@ -236,6 +236,16 @@ class TestSorter:
         assert count_nondirectory_files(os.path.join(destination, 'Fall23')) == 3
         assert not os.path.exists(os.path.join(destination, 'Fall22'))
 
+    def test_no_videos (self):
+        courses = read_test_courses()
+        clear_test_folder()
+        watch, destination = generate_files([])
+        assert count_nondirectory_files(watch) == 0
+        assert count_nondirectory_files(destination) == 0
+        process_existing_files(courses, watch, destination, 'Move')
+        assert count_nondirectory_files(watch) == 0
+        assert count_nondirectory_files(destination) == 0
+
 def create_files_with_mod_date (dest_folder: str, pairs: list[tuple[str, datetime]]): 
     created = []
     for pair in pairs:
