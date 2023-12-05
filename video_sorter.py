@@ -281,7 +281,7 @@ def move_files (pairs: list[tuple[LectureRecording, Course or None]], dest_folde
             for ins in pair[1].hosts:
                 logging.debug(f'Video moved for {ins}')
 
-def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_folder: str):
+def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_folder: str, max_file_bytes):
     """
     Given a list of tuples containing Recordings and their corresponding Courses, 
     uploads files to Kaltura, and then sorts them into folders based on their course
@@ -294,13 +294,17 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
     for pair in pairs:
         if pair[1] is not None:
             for i, insr in enumerate(pair[1].hosts):
-                try:
-                    new_path = get_new_filepath(pair[0], pair[1], dest_folder)
-                    new_name = os.path.basename(new_path).replace('.mp4', '')
-                    upload_video(pair[0], pair[1], client, new_name, i)
-                    logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
-                except Exception as e:
-                    logging.error(f'Error while uploading and moving {pair[0]}. {e}')
+                file_size = os.stat(pair[0].filepath).st_size
+                if file_size <= max_file_bytes:
+                    try:
+                        new_path = get_new_filepath(pair[0], pair[1], dest_folder)
+                        new_name = os.path.basename(new_path).replace('.mp4', '')
+                        upload_video(pair[0], pair[1], client, new_name, i)
+                        logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
+                    except Exception as e:
+                        logging.error(f'Error while uploading {pair[0]}. {e}')
+                else:
+                    logging.warning(f'File too large to upload: {pair[0]}')
 
                 move_video(pair[0], new_path)
                 logging.info(f'Sucessfully moved: {pair[0]}')
@@ -308,7 +312,7 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
             move_unmatched_video(pair[0], dest_folder)
 
 
-def process_existing_files(courses: list[Course], watch_path, dest_path, mode, weeks_before_deletion=26):
+def process_existing_files(courses: list[Course], watch_path, dest_path, mode, weeks_before_deletion=26, max_file_bytes=1024):
     """
     Given a list of courses and file path on which to watch for 
     videos, processes videos accord to what mode has been set 
@@ -317,7 +321,7 @@ def process_existing_files(courses: list[Course], watch_path, dest_path, mode, w
     pairs = match_courses_to_recordings(courses, watch_path)
     if len(pairs) > 0:
         if mode == 'Upload':
-            upload_files(pairs, dest_path)
+            upload_files(pairs, dest_path, max_file_bytes)
         elif mode == 'Move':
             move_files(pairs, dest_path)
     else:
@@ -341,6 +345,8 @@ if __name__ == "__main__":
     MODE = os.path.normpath(config.get('Settings', 'mode'))
     LOG_FILE = config.get('Settings', 'log_file')
     WEEKS_BEFORE_DELETION = config.getint('Settings', 'weeks_before_deletion')
+    MAX_GB = config.getint('Settings', 'max_file_size_gb')
+    max_file_bytes = 1024*1024*1024*MAX_GB
 
     print(f'See {LOG_FILE} for logs')
     
@@ -369,7 +375,7 @@ if __name__ == "__main__":
         current_time = datetime.now().time()
         if current_time.hour == 3 or not has_processed_videos:
             logging.info("It's around 3 AM, time to sort the videos.")
-            process_existing_files(courses, WATCH_FOLDER, DEST_FOLDER, MODE, WEEKS_BEFORE_DELETION)
+            process_existing_files(courses, WATCH_FOLDER, DEST_FOLDER, MODE, WEEKS_BEFORE_DELETION, max_file_bytes)
             has_processed_videos = True
             sleep(3600)  # Sleep for 1 hour
         else:
