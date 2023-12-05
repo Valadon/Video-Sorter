@@ -337,25 +337,18 @@ def process_existing_files(courses: list[Course], watch_path, dest_path, mode, w
     except Exception as e:
         logging.error(f'Error occurred while reaping files: {e}')
 
-if __name__ == "__main__":
-    WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
-    WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
-    DEST_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
-    EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
-    MODE = os.path.normpath(config.get('Settings', 'mode'))
-    LOG_FILE = config.get('Settings', 'log_file')
-    WEEKS_BEFORE_DELETION = config.getint('Settings', 'weeks_before_deletion')
-    MAX_GB = config.getint('Settings', 'max_file_size_gb')
-    max_file_bytes = 1024*1024*1024*MAX_GB
-    CHUNK_SIZE_MB = config.getint('Settings', 'chunk_size_mb')
-    chunk_size_bytes=CHUNK_SIZE_MB*1024*1024
+def initialize_logging():
+    LOG_LEVEL_NAME = config.get('Logging', 'log_level')
+    SMTP_LEVEL_NAME = config.get('LoggingEmails', 'level')
+    LOG_FILE = config.get('Paths', 'log_file')
+    ROLLOVER = config.get('Logging', 'log_rollover_time')
+    ROLLOVER_INTERVAL = config.getint('Logging', 'log_rollover_interval')
+    BACKUP_COUNT = config.getint('Logging', 'log_backup_count')
+    log_level = logging.getLevelNamesMapping()[LOG_LEVEL_NAME]
+    smtp_level = logging.getLevelNamesMapping()[SMTP_LEVEL_NAME]
+    log_format = logging.Formatter(fmt='[%(levelname)s] [%(asctime)s] %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
 
-    print(f'See {LOG_FILE} for logs')
-    
-    # Initialize logging
-    log_level = logging.getLevelNamesMapping()[config.get('Settings', 'log_level')]
-    logging.basicConfig(format='[%(levelname)s] [%(asctime)s] %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p', filename=LOG_FILE, level=log_level)
-    logging.info('\n\nStarting the video sorter\n')
+    logging.getLogger().setLevel(log_level)
 
     # Get the emails for logging
     emails = []
@@ -363,12 +356,34 @@ if __name__ == "__main__":
     for i in range(COUNT):
         emails.append(config.get('LoggingEmails', f'to_email_{i}'))
 
+    # Create STMP log handler
     HOST = config.get('LoggingEmails', 'outbound_server')
     FROM = config.get('LoggingEmails', 'from_address')
-    smtp_level = logging.getLevelNamesMapping()[config.get('LoggingEmails', 'level')]
     smtp_handler = logging.handlers.SMTPHandler(HOST, FROM, emails, config.get('LoggingEmails', 'subject'))
     smtp_handler.setLevel(smtp_level)
+    smtp_handler.setFormatter(log_format)
+
+    # Create file handler
+    rotatingFileHandler = logging.handlers.TimedRotatingFileHandler(filename=LOG_FILE, when=ROLLOVER, backupCount=BACKUP_COUNT, interval=ROLLOVER_INTERVAL)
+    rotatingFileHandler.setFormatter(log_format)
+    
+    # Add the new handlers
     logging.getLogger().addHandler(smtp_handler)
+    logging.getLogger().addHandler(rotatingFileHandler)
+
+if __name__ == "__main__":
+    WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
+    WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
+    DEST_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
+    EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
+    MODE = os.path.normpath(config.get('Settings', 'mode'))
+    WEEKS_BEFORE_DELETION = config.getint('Settings', 'weeks_before_deletion')
+    MAX_GB = config.getint('Settings', 'max_file_size_gb')
+    max_file_bytes = 1024*1024*1024*MAX_GB
+    CHUNK_SIZE_MB = config.getint('Settings', 'chunk_size_mb')
+    chunk_size_bytes=CHUNK_SIZE_MB*1024*1024
+    
+    initialize_logging()
 
     courses = read_courses(EXCEL_FILE_PATH)
     has_processed_videos = False
