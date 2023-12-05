@@ -3,6 +3,7 @@ build
 dist
 .env
 config.ini
+log.txt.*
 log.txt
 .pytest_cache
 __pycache__

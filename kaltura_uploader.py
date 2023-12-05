@@ -38,7 +38,7 @@ def upload_video (filepath: str, kaltura_client: KalturaClient, kaltura_name: st
     ## Step 2: Upload the file
     num_bytes = os.stat(filepath).st_size
     uploadTokenId = token.id
-    with open(filepath) as fileData:
+    with open(filepath, 'rb') as fileData:
         finalChunkIndex = int(float(num_bytes) / float(chunk_size)) * chunk_size
         bytesRead = 0
 
