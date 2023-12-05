@@ -299,7 +299,7 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
                     try:
                         new_path = get_new_filepath(pair[0], pair[1], dest_folder)
                         new_name = os.path.basename(new_path).replace('.mp4', '')
-                        upload_video(pair[0], pair[1], client, new_name, i)
+                        upload_lecture_video(pair[0], pair[1], client, new_name, i)
                         logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
                     except Exception as e:
                         logging.error(f'Error while uploading {pair[0]}. {e}')
