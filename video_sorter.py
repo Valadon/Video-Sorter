@@ -224,7 +224,7 @@ def move_video(rec: LectureRecording, dest_path):
     except Exception as e:
         logging.error(f"An error occurred while moving {rec}: {e}")
 
-def move_unmatched_video(rec: LectureRecording, dest_folder):
+def move_unmatched_video(rec: LectureRecording, dest_folder, do_log=True):
     """
     Moves a recording to the unmatched videos location specified in the config
     """
@@ -233,10 +233,12 @@ def move_unmatched_video(rec: LectureRecording, dest_folder):
     dest_path = os.path.join(unmatched_folder, os.path.basename(rec.filepath))
     try:
         shutil.move(rec.filepath, dest_path)
-        logging.warning(f"No course matched for {rec}. Moved to {unmatched_folder}")
+        if do_log:
+            logging.warning(f"No course matched for {rec}. Moved to {unmatched_folder}")
         rec.filepath = dest_path
     except Exception as e:
-        logging.error(f"An error occurred while moving file: {e}")
+        if do_log:
+            logging.error(f"An error occurred while moving file: {e}")
 
 def match_courses_to_recordings (courses: list[Course], watch_path) -> list[tuple[LectureRecording, Course or None]]:
     """
@@ -301,13 +303,13 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
                         new_name = os.path.basename(new_path).replace('.mp4', '')
                         upload_lecture_video(pair[0], pair[1], client, chunk_size_bytes, new_name, i)
                         logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
+                        move_video(pair[0], new_path)
+                        logging.info(f'Sucessfully moved: {pair[0]}')
                     except Exception as e:
                         logging.error(f'Error while uploading {pair[0]}. {e}')
                 else:
                     logging.warning(f'File too large to upload: {pair[0]}')
-
-                move_video(pair[0], new_path)
-                logging.info(f'Sucessfully moved: {pair[0]}')
+                    move_unmatched_video(pair[0], dest_folder, do_log=False)
         else:
             move_unmatched_video(pair[0], dest_folder)
 
