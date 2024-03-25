@@ -213,16 +213,18 @@ def get_new_filepath(rec: LectureRecording, course: Course, dest_folder: str):
 
     return full_path
 
-def move_video(rec: LectureRecording, dest_path):
+def move_video(rec: LectureRecording, dest_path) -> bool:
     """
-    Moves a recording to the given destination
+    Moves a recording to the given destination. Returns a boolean indicating success
     """
     try:
         shutil.move(rec.filepath, dest_path)
         logging.info(f"Video moved from {rec.filepath} to {dest_path}")
         rec.filepath = dest_path
+        return True
     except Exception as e:
         logging.error(f"An error occurred while moving {rec}: {e}")
+        return False
 
 def move_unmatched_video(rec: LectureRecording, dest_folder, do_log=True):
     """
@@ -303,8 +305,8 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
                         new_name = os.path.basename(new_path).replace('.mp4', '')
                         upload_lecture_video(pair[0], pair[1], client, chunk_size_bytes, new_name, i)
                         logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
-                        move_video(pair[0], new_path)
-                        logging.info(f'Sucessfully moved: {pair[0]}')
+                        if move_video(pair[0], new_path):
+                            logging.info(f'Sucessfully moved: {pair[0]}')
                     except Exception as e:
                         logging.error(f'Error while uploading {pair[0]}. {e}')
                 else:
