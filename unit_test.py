@@ -6,7 +6,7 @@ import freezegun
 import pytest
 
 from data_types import *
-from video_sorter import read_courses, match_courses_to_recordings, move_video, get_new_filepath, process_existing_files
+from video_sorter import read_courses, match_courses_to_recordings, move_video, get_new_filepath, process_existing_files, get_or_create_class_folder
 from file_reaper import reap_files
 
 def clear_directory(directory_path):
@@ -254,6 +254,21 @@ class TestSorter:
         process_existing_files(courses, watch, destination, 'Move')
         assert count_nondirectory_files(watch) == 0
         assert count_nondirectory_files(destination) == 0
+
+    def test_invalid_classname (self):
+        course = Course(
+            "LAW 2024",
+            "1",
+            "Fake Course: A lie & a farse",
+            "MORALES",
+            "4603",
+            {"Monday"},
+            time(10, 30),
+            []
+        )
+        rec = LectureRecording(None, date(2024, 3, 4), time(10, 28), 4603, 'extron')
+        filepath = get_or_create_class_folder(course, rec, "C:")
+        assert filepath.endswith("LAW 2024_Fake Course A lie _ a farse_MORALES")
 
 def create_files_with_mod_date (dest_folder: str, pairs: list[tuple[str, datetime]]): 
     created = []
