@@ -2,6 +2,8 @@ import os
 import configparser
 config = configparser.ConfigParser()
 config.read('config.ini')
+import freezegun
+import pytest
 
 from data_types import *
 from video_sorter import read_courses, match_courses_to_recordings, move_video, get_new_filepath, process_existing_files
@@ -83,6 +85,13 @@ def get_test_recs ():
         'capturecast_old': LectureRecording(None, date(2022, 10, 5), None, None, 'capturecast', '4560', '1', 'LAW'),
         'extron_invalid': LectureRecording(None, date(2023, 11, 14), time(10, 28), 4603, 'extron'),
     }
+
+@pytest.fixture(autouse=True)
+def timefreezer ():
+    freezer = freezegun.freeze_time("2024-03-25")
+    freezer.start()
+    yield
+    freezer.stop()
 
 class TestSorter:
     def test_course_import (self):
