@@ -19,7 +19,7 @@ config = configparser.ConfigParser()
 config.read('config.ini')
 
 RECORDING_START_TOLERANCE = timedelta(minutes=config.getint('Settings', 'start_time_tolerance'))
-   
+
 # Read course details from the Excel sheet into the global 'courses' list
 def read_courses(excel_path) -> list[Course]:
     """
@@ -164,6 +164,20 @@ def determine_semester(date: date):
         return f'Summer{year}'
     else:
         return f'Fall{year}'
+    
+def clean_filename (filename: str):
+    """
+    Returns a version of the filename without any illegal characters
+    """
+    illegal_character_replacements = {
+        "&": "_",
+        ":": ""
+    }
+    new_filename = filename
+    for char, replacement in illegal_character_replacements.items():
+        new_filename = new_filename.replace(char, replacement)
+
+    return new_filename
 
 def get_or_create_class_folder(course: Course, rec: LectureRecording, dest_folder: str):
     """
@@ -179,7 +193,7 @@ def get_or_create_class_folder(course: Course, rec: LectureRecording, dest_folde
     os.makedirs(semester_path, exist_ok=True)
     
     # Creating the course folder inside the semester folder
-    folder_name = f"{course.course_number_full}_{course.name}_{course.instructor_last}".replace('&', '')
+    folder_name = clean_filename(f"{course.course_number_full}_{course.name}_{course.instructor_last}")
     folder_path = os.path.join(semester_path, folder_name)
     folder_path = os.path.abspath(folder_path)  # Use absolute path
     try:
