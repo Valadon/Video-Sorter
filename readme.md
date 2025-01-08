@@ -12,8 +12,13 @@ To run the tests, simply run `pytest` in the command line after installing the p
 # Build to Executable
 1. Run `pyinstaller video_sorter.py`
 
+# Considerations for the Schedule file
+- Ensure that the Room (Cleaned) column contains only the room number, with no prefix
+- You may delete any rows for online classes, or any classes which specify (Does not Meet) but this shouldn't be required
+- Make sure the instructor column fits the expected format. Occasionally, the instructor will simply be listed as "staff"
+
 # Roadmap
 - ~~Write instructions for building to an executable.~~
 - Develop a special case which allows the script to ingest filenames which are preceded by a list of uNIDs. For example: u1234567 u9876543 META_DATA.mp4. This would help us deliver videos to people even if their recording wasn't scheduled
 - Alternatively, create a separate schedule that tracks one-time events
-- Purge files after a specific date
+- ~~Purge files after a specific date~~
