@@ -1,7 +1,7 @@
 from data_types import *
 import re
 
-def extron_format_parser(filepath: str) -> LectureRecording or None:
+def old_extron_format_parser(filepath: str) -> LectureRecording or None:
     filename = os.path.basename(filepath)
     extron_pattern = r'(\d+)_Rec\d+_.*?_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
     match_extron = re.match(extron_pattern, filename)
@@ -13,6 +13,18 @@ def extron_format_parser(filepath: str) -> LectureRecording or None:
     else:
         return None
     
+def extron_format_parser(filepath: str) -> LectureRecording or None:
+    filename = os.path.basename(filepath)
+    extron_pattern = r'(\d+)_.*?_(\d{8})-(\d{6})_[sS]1[rR]1.mp4'
+    match_extron = re.match(extron_pattern, filename)
+    if match_extron:
+        room_number, rec_date, rec_time = match_extron.groups()
+        dt = datetime.strptime(f'{rec_date}{rec_time}', '%Y%m%d%H%M%S')
+        rec = LectureRecording(filepath, dt.date(), dt.time(), room_number, 'extron')
+        return rec
+    else:
+        return None
+
 def capturecast_format_parser(filepath: str) -> LectureRecording or None:
     filename = os.path.basename(filepath)
     capturecast_pattern = r'(\w+)-(\d+)-(\d+)---(\d{1,2})-(\d{1,2})-(\d{4}).mp4'

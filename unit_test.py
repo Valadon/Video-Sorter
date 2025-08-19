@@ -53,7 +53,7 @@ def generate_files (recs: list[LectureRecording], numBytes=4):
         if rec.rec_device == 'extron':
             stringdate = rec.date.strftime("%Y%m%d")
             stringtime = rec.time.strftime("%H%M%S")
-            filename = f'{rec.room_number}_Rec1_{stringdate}-1_{stringdate}-{stringtime}_S1R1.mp4'
+            filename = f'{rec.room_number}_{stringdate}-1_{stringdate}-{stringtime}_S1R1.mp4'
         elif rec.rec_device == 'extron_2100':
             stringdate = rec.date.strftime("%Y%m%d")
             stringtime = rec.time.strftime("%H%M%S")
@@ -165,7 +165,7 @@ class TestSorter:
         testrec = get_test_recs()['extron']
         clear_test_folder()
         watch, destination = generate_files([testrec])
-        old_path = os.path.join(watch, '4603_Rec1_20231114-1_20231114-142800_S1R1.mp4')
+        old_path = os.path.join(watch, '4603_20231114-1_20231114-142800_S1R1.mp4')
         assert os.path.exists(old_path)
         pairs = match_courses_to_recordings(courses, watch)
         new_path = get_new_filepath(pairs[0][0], pairs[0][1], destination)
@@ -228,7 +228,7 @@ class TestSorter:
         for rec in testrects:
             assert os.path.exists(rec.filepath)
             old_paths.append(rec.filepath)
-        process_existing_files(courses, watch, destination, 'Move')
+        process_existing_files(courses, watch, destination, 'Move', from_date=datetime(2023, 4, 6))
         for path in old_paths:
             assert not os.path.exists(path)
         assert count_nondirectory_files(destination) == 4

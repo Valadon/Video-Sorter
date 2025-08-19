@@ -312,7 +312,7 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
             move_unmatched_video(pair[0], dest_folder)
 
 
-def process_existing_files(courses: list[Course], watch_path, dest_path, mode, weeks_before_deletion=26):
+def process_existing_files(courses: list[Course], watch_path, dest_path, mode, weeks_before_deletion=26, from_date: date | None=None):
     """
     Given a list of courses and file path on which to watch for 
     videos, processes videos accord to what mode has been set 
@@ -327,7 +327,8 @@ def process_existing_files(courses: list[Course], watch_path, dest_path, mode, w
     else:
         logging.info("No new videos to sort")
 
-    cutoff = datetime.now() - timedelta(weeks = weeks_before_deletion)
+    start_date = from_date if from_date else datetime.now()
+    cutoff = start_date - timedelta(weeks = weeks_before_deletion)
     logging.info(f'Reaping all files last modified before {cutoff.strftime("%m/%d/%Y, %H:%M:%S")}')
     try:
         reaped_files = reap_files(dest_path, cutoff)
