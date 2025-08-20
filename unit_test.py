@@ -87,9 +87,10 @@ def get_test_recs ():
 class TestSorter:
     def test_course_import (self):
         courses = read_test_courses()
+        expected_course_names = ["Course1: The Sequel", "Course2", "Course3"]
         lastnames = ['BEEKHUIZEN', 'FERGUSON', 'FINCH MORALES']
         for i, course in enumerate(courses):
-            assert course.name == f'Course{i+1}'
+            assert course.name == expected_course_names[i]
             assert course.instructor_last == lastnames[i]
             for ins in course.hosts:
                 assert ins.last in lastnames[i]
@@ -101,7 +102,7 @@ class TestSorter:
         watch, destination = generate_files([testrec])
         pairs = match_courses_to_recordings(courses, watch)
         assert str(pairs[0][0]) == str(testrec)
-        assert pairs[0][1].name == 'Course1'
+        assert pairs[0][1].name == 'Course1: The Sequel'
     
     def test_unscheduled_extron_sorting (self):
         courses = read_test_courses()
@@ -171,7 +172,7 @@ class TestSorter:
         new_path = get_new_filepath(pairs[0][0], pairs[0][1], destination)
         move_video(pairs[0][0], new_path)
         assert not os.path.exists(old_path)
-        new_path = os.path.join(destination, 'Fall23\\LAW 1230_Course1_BEEKHUIZEN\\Course1_BEEKHUIZEN_11-14-23.mp4')
+        new_path = os.path.join(destination, 'Fall23\\LAW 1230_Course1 The Sequel_BEEKHUIZEN\\Course1 The Sequel_BEEKHUIZEN_11-14-23.mp4')
         assert os.path.exists(new_path)
         assert new_path == pairs[0][0].filepath
 

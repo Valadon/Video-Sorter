@@ -60,7 +60,7 @@ def read_courses(excel_path) -> list[Course]:
             start_time_str = start_time_str.replace('am', 'AM').replace('pm', 'PM')
             start_time = datetime.strptime(start_time_str, '%I:%M%p' if ':' in start_time_str else '%I%p').time()
         else:
-            logging.warning(f"Invalid start time found for course {row['Course']}. Skipping.")
+            logging.info(f"Invalid start time found for course {row['Course']}. Skipping.")
 
         instructors = []
         instructorStrings = row['Instructor'].split('; ')
@@ -166,6 +166,13 @@ def determine_semester(date: date):
     else:
         return f'Fall{year}'
 
+
+def get_folder_safe_name(name) -> str:
+    def is_valid_char (char: str):
+        return char.isalnum() or char == " " or char == "_" or char == "-"
+    
+    return "".join([x if is_valid_char(x) else "" for x in name])
+
 def get_or_create_class_folder(course: Course, rec: LectureRecording, dest_folder: str):
     """
     Returns the file path of the folder where a recording should go 
@@ -180,7 +187,7 @@ def get_or_create_class_folder(course: Course, rec: LectureRecording, dest_folde
     os.makedirs(semester_path, exist_ok=True)
     
     # Creating the course folder inside the semester folder
-    folder_name = f"{course.number}_{course.name}_{course.instructor_last}".replace('&', '')
+    folder_name = get_folder_safe_name(f"{course.number}_{course.name}_{course.instructor_last}")
     folder_path = os.path.join(semester_path, folder_name)
     folder_path = os.path.abspath(folder_path)  # Use absolute path
     try:
@@ -202,7 +209,7 @@ def get_new_filepath(rec: LectureRecording, course: Course, dest_folder: str):
     # Convert the date to a more readable format
     readable_date = rec.date.strftime("%m-%d-%y")
 
-    new_filename = f"{course.name}_{course.instructor_last}_{readable_date}"
+    new_filename = get_folder_safe_name(f"{course.name}_{course.instructor_last}_{readable_date}")
     counter = 1
     ext = '.mp4'
     full_path = os.path.join(dest_folder, f'{new_filename}{ext}')
