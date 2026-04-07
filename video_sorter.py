@@ -178,15 +178,14 @@ def get_or_create_class_folder(course: Course, rec: LectureRecording, dest_folde
     Returns the file path of the folder where a recording should go 
     based on the recording date and course
     """
-    # Getting the date from the determine_course function
-    # Check if time is None before concatenation
+
     semester = determine_semester(rec.date)
     
-    # Creating the semester folder if it doesn't exist
+    # Create the semester folder if it doesn't exist
     semester_path = os.path.join(dest_folder, semester)
     os.makedirs(semester_path, exist_ok=True)
     
-    # Creating the course folder inside the semester folder
+    # Create the course folder inside the semester folder
     folder_name = get_folder_safe_name(f"{course.number}_{course.name}_{course.instructor_last}")
     folder_path = os.path.join(semester_path, folder_name)
     folder_path = os.path.abspath(folder_path)  # Use absolute path
@@ -200,7 +199,7 @@ def get_or_create_class_folder(course: Course, rec: LectureRecording, dest_folde
 
 def get_new_filepath(rec: LectureRecording, course: Course, dest_folder: str):
     """
-    Returns a new filepath for the recording based on the course it is assigned to.
+    Returns a new filepath for the recording based on the course you assign it to by passing it in here.
 
     For example, LAW 5000_Beekhuizen_11-17-2023
     """
@@ -322,7 +321,7 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
 def process_existing_files(courses: list[Course], watch_path, dest_path, mode, weeks_before_deletion=26, from_date: date | None=None):
     """
     Given a list of courses and file path on which to watch for 
-    videos, processes videos accord to what mode has been set 
+    videos, processes videos according to what mode has been set 
     in the config file.
     """
     pairs = match_courses_to_recordings(courses, watch_path)

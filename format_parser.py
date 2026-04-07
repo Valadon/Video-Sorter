@@ -1,3 +1,10 @@
+'''
+This file contains functions which extract information from a filename and 
+put it into an instance of the LectureRecording class. Each function should 
+accept a string and return either None if it can't get all of the necessary 
+information, or the successfully created LectureRecording instance.
+'''
+
 from data_types import *
 import re
 

@@ -1,3 +1,7 @@
+'''
+A basic utility for editing the last edited time of files
+'''
+
 if __name__ == '__main__':
     import os
     import datetime

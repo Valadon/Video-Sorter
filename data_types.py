@@ -51,12 +51,20 @@ class Recording:
         return datetime(self.date.year, self.date.month, self.date.day, self.time.hour, self.time.minute, 0, 0)
     
 class ManualRecording(Recording):
+    '''
+    Currently Unused. Intended to represent a generic recording 
+    which is not strictly for a lecture. Could be a recording 
+    of any kind of event.
+    '''
     def __init__(self, filepath: str, rec_device: str, date: date, time: time, metadata: str, unids: list[str]):
         super().__init__(filepath, rec_device, date, time)
         self.metadata = metadata
         self.unids = unids
 
 class LectureRecording(Recording):
+    '''
+    A wrapper for information extracted from a filename
+    '''
     def __init__(self, filepath: str, date: date, time: time, room_number: str, rec_device: str, course_number: str=None, section_number: str=None, course_code: str=None):
         super().__init__(filepath, rec_device, date, time)
         self.room_number = room_number

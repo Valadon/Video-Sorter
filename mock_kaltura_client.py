@@ -1,7 +1,9 @@
-# The existing Kaltura Python library doesn't quite seem to work correctly, 
-# so in the meantime I developed a very simple mock of that client that does 
-# what we need it to do. Ideally, if the client library is fixed it won't 
-# take much to migrate scripts to use it.
+'''
+The existing Kaltura Python library doesn't quite seem to work correctly, 
+so in the meantime I developed a very simple mock of that client that does 
+what we need it to do. Ideally, if the client library is fixed it won't 
+take much to migrate scripts to use it.
+'''
 
 import requests
 
