@@ -14,11 +14,60 @@ from format_parser import *
 from collections.abc import Callable
 from file_reaper import reap_files
 
+MEETING_DAY_PATTERN = re.compile(r'TTh|Th|Su|Sa|M|T|W|F')
+MEETING_DAY_MAP = {
+    'M': {'Monday'},
+    'T': {'Tuesday'},
+    'W': {'Wednesday'},
+    'Th': {'Thursday'},
+    'TTh': {'Tuesday', 'Thursday'},
+    'F': {'Friday'},
+    'Sa': {'Saturday'},
+    'Su': {'Sunday'},
+}
+
 # Reading paths from config.ini
-config = configparser.ConfigParser()
+config = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
 config.read('config.ini')
 
 RECORDING_START_TOLERANCE = timedelta(minutes=config.getint('Settings', 'start_time_tolerance'))
+
+def parse_meeting_days(meeting_pattern: str) -> set[str]:
+    days: set[str] = set()
+    for token in MEETING_DAY_PATTERN.findall(meeting_pattern):
+        days.update(MEETING_DAY_MAP[token])
+    return days
+
+def parse_start_time(meeting_pattern: str) -> time | None:
+    start_time_match = re.search(r'\b\d{1,2}:\d{2}(?:am|pm)\b|\b\d{1,2}(?:am|pm)\b', meeting_pattern, re.IGNORECASE)
+    if start_time_match is None:
+        return None
+
+    start_time_str = start_time_match.group().replace('am', 'AM').replace('pm', 'PM')
+    return datetime.strptime(start_time_str, '%I:%M%p' if ':' in start_time_str else '%I%p').time()
+
+def parse_instructors(raw_instructors, course_number: str, section_number: str) -> list[EventHost]:
+    instructors: list[EventHost] = []
+
+    if pd.isna(raw_instructors):
+        logging.warning(f"Course {course_number}-{section_number} is missing instructor data. Upload mode will leave matching files in place.")
+        return instructors
+
+    instructor_strings = str(raw_instructors).split(';')
+    for instructor_string in instructor_strings:
+        instructor_string = instructor_string.strip()
+        if instructor_string == '':
+            continue
+
+        instructor_match = re.fullmatch(r'([^(),\d]+),\s*([^()\d]+)\s+\((\d{8})\);*', instructor_string)
+        if instructor_match is None:
+            logging.warning(f"Could not parse instructor '{instructor_string}' for course {course_number}-{section_number}. Upload mode will leave matching files in place.")
+            continue
+
+        last_name, first_name, unid = instructor_match.groups()
+        instructors.append(EventHost(first_name.strip(), last_name.strip(), unid))
+
+    return instructors
    
 # Read course details from the Excel sheet into the global 'courses' list
 def read_courses(excel_path) -> list[Course]:
@@ -31,51 +80,19 @@ def read_courses(excel_path) -> list[Course]:
     df = df.dropna(how='all')
     for index, row in df.iterrows():
         instructor = str(row['Instructor LAST']).replace(' & ', ' ') if pd.notna(row['Instructor LAST']) else ''
-        days_pattern = re.findall(r'M|TTh|T|W|F|Sa', str(row['Meeting Pattern']))
-        days = set()  # Define the days list here
-        for day_pattern in days_pattern:
-            if day_pattern == 'M':
-                days.add('Monday')
-            elif day_pattern == 'TTh':
-                days.add('Tuesday')
-                days.add('Thursday')
-            elif day_pattern == 'T':
-                days.add('Tuesday')
-            elif day_pattern == 'W':
-                days.add('Wednesday')
-            elif day_pattern == 'F':
-                days.add('Friday')
-            elif day_pattern == 'Sa':
-                days.add('Saturday')
-
-        start_time = None
-
-        # Extract time pattern from the correct column (modify as needed)
-        time_pattern = str(row['Meeting Pattern'])
-
-        # Correctly parse start time
-        start_time_str = re.search(r'\b\d{1,2}:\d{2}(?:am|pm)\b|\b\d{1,2}(?:am|pm)\b', time_pattern, re.IGNORECASE)
-        if start_time_str:
-            start_time_str = start_time_str.group()
-            start_time_str = start_time_str.replace('am', 'AM').replace('pm', 'PM')
-            start_time = datetime.strptime(start_time_str, '%I:%M%p' if ':' in start_time_str else '%I%p').time()
-        else:
-            logging.info(f"Invalid start time found for course {row['Course']}. Skipping.")
-
-        instructors = []
-        instructorStrings = row['Instructor'].split('; ')
-        for s in instructorStrings:
-            instructorMatch = re.search(r'([^(),\d]+),\s*([^()\d]+)\s+\((\d{8})\);*\s*', s)
-            groups = instructorMatch.groups()
-            instructors.append(EventHost(groups[1], groups[0], groups[2]))
-
-
         # Extract and store the section number
         section_number = row['Section #'] if pd.notna(row['Section #']) else None
+        section_number = str(section_number)
+        meeting_pattern = str(row['Meeting Pattern'])
+        days = parse_meeting_days(meeting_pattern)
+        start_time = parse_start_time(meeting_pattern)
+        if start_time is None:
+            logging.warning(f"Could not parse a start time for course {row['Course']}-{section_number} from meeting pattern '{meeting_pattern}'. Room/time matching will skip this course.")
+        instructors = parse_instructors(row['Instructor'], row['Course'], section_number)
 
         course = Course(
             row['Course'],
-            str(section_number),
+            section_number,
             row['Course Title'],
             instructor,
             str(row['Room (cleaned)']),
@@ -133,7 +150,10 @@ def find_course_by_room_and_datetime(courses: list[Course], rec: LectureRecordin
         if course.room_number != rec.room_number:
             continue
             
-        if rec.time is None:
+        if rec.time is None or rec.date is None:
+            continue
+
+        if course.start_time is None or len(course.days) == 0:
             continue
 
         weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -303,17 +323,28 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
         return
     for pair in pairs:
         if pair[1] is not None:
+            if len(pair[1].hosts) == 0:
+                logging.error(f"Cannot upload {pair[0]} because the matching course has no valid instructors. Leaving the source file in place for review.")
+                continue
+
+            new_path = get_new_filepath(pair[0], pair[1], dest_folder)
+            new_name = os.path.basename(new_path).replace('.mp4', '')
+            upload_succeeded = True
+
             for i, insr in enumerate(pair[1].hosts):
                 try:
-                    new_path = get_new_filepath(pair[0], pair[1], dest_folder)
-                    new_name = os.path.basename(new_path).replace('.mp4', '')
                     upload_video(pair[0], pair[1], client, new_name, i)
-                    logging.info(f'Sucessfully uploaded: {pair[0]}. Now moving')
+                    logging.info(f'Successfully uploaded {pair[0]} for {insr}')
                 except Exception as e:
-                    logging.error(f'Error while uploading and moving {pair[0]}. {e}')
+                    logging.error(f'Error while uploading {pair[0]} for {insr}. {e}')
+                    upload_succeeded = False
+                    break
 
-                move_video(pair[0], new_path)
-                logging.info(f'Sucessfully moved: {pair[0]}')
+            if not upload_succeeded:
+                continue
+
+            move_video(pair[0], new_path)
+            logging.info(f'Successfully moved: {pair[0]}')
         else:
             move_unmatched_video(pair[0], dest_folder)
 

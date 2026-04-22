@@ -47,11 +47,11 @@ def upload_video (rec: LectureRecording, course: Course, kaltura_client: Kaltura
 
     ## Step 2: Upload the file using the upload token we just obtained.
     uploadTokenId = token.id
-    fileData = open(rec.filepath, 'rb')
     resume = False
     finalChunk = True
     resumeAt = 0
-    result = kaltura_client.uploadToken.upload(uploadTokenId, fileData, resume, finalChunk, resumeAt)
+    with open(rec.filepath, 'rb') as fileData:
+        result = kaltura_client.uploadToken.upload(uploadTokenId, fileData, resume, finalChunk, resumeAt)
 
     ## Step 3: Create a media entry. This is the actual database record.
     mediaEntry = KalturaMediaEntry()

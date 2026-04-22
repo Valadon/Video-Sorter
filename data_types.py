@@ -73,7 +73,7 @@ class LectureRecording(Recording):
         self.course_code = course_code
         
     def was_scheduled (self):
-        return not ((self.room_number is None) and (self.date is None) and (self.time))
+        return not ((self.room_number is None) and (self.date is None) and (self.time is None))
     
     def course_number_full(self):
         if self.course_code is None or self.course_number is None:

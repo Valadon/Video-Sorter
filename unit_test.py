@@ -1,10 +1,13 @@
 import os
 import configparser
-config = configparser.ConfigParser()
+import io
+import pandas as pd
+config = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
 config.read('config.ini')
 
 from data_types import *
-from video_sorter import read_courses, match_courses_to_recordings, move_video, get_new_filepath, process_existing_files
+import video_sorter
+from video_sorter import read_courses, match_courses_to_recordings, move_video, get_new_filepath, process_existing_files, find_course_by_room_and_datetime, upload_files
 from file_reaper import reap_files
 
 def clear_directory(directory_path):
@@ -172,7 +175,7 @@ class TestSorter:
         new_path = get_new_filepath(pairs[0][0], pairs[0][1], destination)
         move_video(pairs[0][0], new_path)
         assert not os.path.exists(old_path)
-        new_path = os.path.join(destination, 'Fall23\\LAW 1230_Course1 The Sequel_BEEKHUIZEN\\Course1 The Sequel_BEEKHUIZEN_11-14-23.mp4')
+        new_path = os.path.join(destination, 'Fall23', 'LAW 1230_Course1 The Sequel_BEEKHUIZEN', 'Course1 The Sequel_BEEKHUIZEN_11-14-23.mp4')
         assert os.path.exists(new_path)
         assert new_path == pairs[0][0].filepath
 
@@ -246,6 +249,104 @@ class TestSorter:
         process_existing_files(courses, watch, destination, 'Move')
         assert count_nondirectory_files(watch) == 0
         assert count_nondirectory_files(destination) == 0
+
+    def test_unparseable_instructor_does_not_crash_course_import(self, monkeypatch):
+        df = pd.DataFrame([
+            {
+                'Course': 'LAW 1230',
+                'Section #': 1,
+                'Course Title': 'Course1',
+                'Meeting Pattern': 'TTh 2:30pm-4:30pm',
+                'Meetings': 'TTh 2:30pm-4:30pm',
+                'Instructor LAST': 'STAFF',
+                'Room (cleaned)': 4603,
+                'Instructor': 'staff',
+                'Room': 'LAW 4603',
+            }
+        ])
+        monkeypatch.setattr(video_sorter.pd, 'read_excel', lambda _: df)
+
+        courses = read_courses('ignored.xlsx')
+
+        assert len(courses) == 1
+        assert courses[0].hosts == []
+
+    def test_unparseable_meeting_time_does_not_crash_room_match(self, monkeypatch):
+        df = pd.DataFrame([
+            {
+                'Course': 'LAW 1230',
+                'Section #': 1,
+                'Course Title': 'Course1',
+                'Meeting Pattern': 'TTh TBD',
+                'Meetings': 'TTh TBD',
+                'Instructor LAST': 'BEEKHUIZEN',
+                'Room (cleaned)': 4603,
+                'Instructor': 'BEEKHUIZEN, MARK (00104226)',
+                'Room': 'LAW 4603',
+            }
+        ])
+        monkeypatch.setattr(video_sorter.pd, 'read_excel', lambda _: df)
+        courses = read_courses('ignored.xlsx')
+        rec = LectureRecording('test.mp4', date(2023, 11, 14), time(14, 30), '4603', 'extron')
+
+        assert find_course_by_room_and_datetime(courses, rec) is None
+
+    def test_thursday_only_meeting_pattern_maps_to_thursday(self, monkeypatch):
+        df = pd.DataFrame([
+            {
+                'Course': 'LAW 1230',
+                'Section #': 1,
+                'Course Title': 'Course1',
+                'Meeting Pattern': 'Th 2:30pm-4:30pm',
+                'Meetings': 'Th 2:30pm-4:30pm',
+                'Instructor LAST': 'BEEKHUIZEN',
+                'Room (cleaned)': 4603,
+                'Instructor': 'BEEKHUIZEN, MARK (00104226)',
+                'Room': 'LAW 4603',
+            }
+        ])
+        monkeypatch.setattr(video_sorter.pd, 'read_excel', lambda _: df)
+
+        courses = read_courses('ignored.xlsx')
+
+        assert courses[0].days == {'Thursday'}
+
+    def test_unknown_recording_is_not_marked_scheduled(self):
+        rec = LectureRecording('unknown.mp4', None, None, None, None)
+        assert rec.was_scheduled() is False
+
+    def test_failed_upload_leaves_file_in_watch_folder(self, monkeypatch):
+        courses = read_test_courses()
+        testrec = get_test_recs()['extron']
+        clear_test_folder()
+        watch, destination = generate_files([testrec])
+        pairs = match_courses_to_recordings(courses, watch)
+        source_path = pairs[0][0].filepath
+
+        monkeypatch.setattr(video_sorter, 'get_kaltura_client', lambda: object())
+
+        def fail_upload(*args, **kwargs):
+            raise RuntimeError('upload failed')
+
+        monkeypatch.setattr(video_sorter, 'upload_video', fail_upload)
+
+        upload_files(pairs, destination)
+
+        assert os.path.exists(source_path)
+        assert count_nondirectory_files(destination) == 0
+
+    def test_config_parser_supports_inline_comments(self):
+        cfg = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
+        cfg.read_file(io.StringIO("""
+[Settings]
+mode=Upload # Upload or Move
+log_level=INFO # See python's logging levels
+start_time_tolerance=30 # Tolerance in minutes
+"""))
+
+        assert cfg.get('Settings', 'mode') == 'Upload'
+        assert cfg.get('Settings', 'log_level') == 'INFO'
+        assert cfg.getint('Settings', 'start_time_tolerance') == 30
 
 def create_files_with_mod_date (dest_folder: str, pairs: list[tuple[str, datetime]]): 
     created = []

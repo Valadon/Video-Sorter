@@ -59,7 +59,7 @@ The app expects a real `config.ini` at the repo root. The example file shows the
   - `to_count`
   - `to_email_0...n`
 
-Sharp edge: `config-EXAMPLE.ini` uses inline comments like `mode=Upload # Upload or Move`. With the current `ConfigParser()` call, those comment fragments are read as part of the value. A copied example must remove those inline comments to work correctly.
+The runtime config parser now supports inline comments, but the example file keeps comments on their own lines so it stays easy to copy and audit.
 
 ### 2. `.env`
 

@@ -35,7 +35,7 @@ Note: the current `requirements.txt` file is UTF-16LE encoded.
 
 ### 3. Create `config.ini`
 
-Use `config-EXAMPLE.ini` as a reference, but do not copy the inline comments on the same line as values. With the current Python `ConfigParser` usage, those inline comments become part of the value.
+Use `config-EXAMPLE.ini` as a reference. The app now supports inline config comments, but the example keeps explanatory comments on their own lines to stay easy to copy and audit.
 
 ### 4. Add `.env` if using upload mode
 
