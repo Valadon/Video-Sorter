@@ -2,10 +2,12 @@ import os
 import configparser
 import io
 import pandas as pd
+import pytest
 config = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
 config.read('config.ini')
 
 from data_types import *
+from mock_kaltura_client import KalturaApiError, KalturaClient, KalturaConfiguration
 import video_sorter
 from video_sorter import read_courses, match_courses_to_recordings, move_video, get_new_filepath, process_existing_files, find_course_by_room_and_datetime, upload_files
 from file_reaper import reap_files
@@ -424,3 +426,69 @@ class TestReaper:
         assert not os.path.exists(folder_to_delete)
         assert os.path.exists(folder_to_keep)
         assert count_nondirectory_files(folder_to_keep) == 1
+
+class TestKalturaClient:
+    def make_client(self):
+        client = KalturaClient(KalturaConfiguration())
+        client.sessionData = KalturaClient.SessionData({
+            'ks': 'test-ks',
+            'partnerId': 1234567,
+        })
+        return client
+
+    def test_api_errors_raise_helpful_exception(self, monkeypatch):
+        client = self.make_client()
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    'objectType': 'KalturaAPIException',
+                    'code': 'SERVICE_FORBIDDEN',
+                    'message': 'Forbidden action',
+                }
+
+        monkeypatch.setattr('mock_kaltura_client.requests.post', lambda *args, **kwargs: FakeResponse())
+
+        with pytest.raises(KalturaApiError, match='SERVICE_FORBIDDEN: Forbidden action'):
+            client.media.add(type('Entry', (), {
+                'toDict': lambda self: {'name': 'Demo', 'mediaType': 1},
+            })())
+
+    def test_upload_uses_returned_upload_url_when_available(self, monkeypatch):
+        client = self.make_client()
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        def fake_post(url, json=None, files=None):
+            calls.append({'url': url, 'json': json, 'files': files})
+            if 'uploadtoken/action/add' in url:
+                return FakeResponse({
+                    'id': 'upload-token-1',
+                    'uploadUrl': 'https://upload.example.com/api_v3/service/uploadtoken/action/upload?format=1',
+                })
+
+            return FakeResponse({
+                'id': 'upload-token-1',
+                'status': 2,
+            })
+
+        monkeypatch.setattr('mock_kaltura_client.requests.post', fake_post)
+
+        token = client.uploadToken.add(None)
+        result = client.uploadToken.upload(token.id, io.BytesIO(b'test'), False, True, 0)
+
+        assert result.id == 'upload-token-1'
+        assert calls[1]['url'].startswith('https://upload.example.com/api_v3/service/uploadtoken/action/upload')
+        assert 'uploadTokenId=upload-token-1' in calls[1]['url']

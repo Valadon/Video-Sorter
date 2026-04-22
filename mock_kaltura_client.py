@@ -7,16 +7,25 @@ take much to migrate scripts to use it.
 
 import requests
 
+class KalturaApiError(RuntimeError):
+    pass
+
 class KalturaConfiguration:
     pass
 
 class KalturaUploadToken:
-    def __init__(self, id=None):
+    def __init__(self, id=None, uploadUrl=None, status=None):
         self.id = id
+        self.uploadUrl = uploadUrl
+        self.status = status
 
     @staticmethod
     def fromJsonResponse(res):
-        return KalturaUploadToken(id=res['id'])
+        return KalturaUploadToken(
+            id=res['id'],
+            uploadUrl=res.get('uploadUrl', None),
+            status=res.get('status', None),
+        )
 
 class KalturaServiceBase:
     def __init__(self, client):
@@ -28,6 +37,7 @@ class KalturaMediaEntry:
         self.description = None
         self.mediaType = None
         self.id = None
+        self.userId = None
 
     @staticmethod
     def fromJsonResponse(res):
@@ -85,7 +95,35 @@ class KalturaClient:
         url = f'https://www.kaltura.com/api_v3/service/{path}{query}'
         return url
     
-    def getRequestData(self, data={}) -> dict:
+    @staticmethod
+    def _parse_response(response):
+        response.raise_for_status()
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise KalturaApiError("Kaltura returned a non-JSON response") from exc
+
+        if isinstance(payload, dict) and payload.get('objectType') == 'KalturaAPIException':
+            code = payload.get('code', 'UNKNOWN')
+            message = payload.get('message', 'Unknown Kaltura API error')
+            raise KalturaApiError(f"{code}: {message}")
+
+        return payload
+
+    def post_json(self, path: str, data=None, **kwargs):
+        response = requests.post(self.kurl(path, **kwargs), json=data)
+        return self._parse_response(response)
+
+    def post_upload(self, url: str, fileData):
+        response = requests.post(url, files={
+            'fileData': fileData
+        })
+        return self._parse_response(response)
+
+    def getRequestData(self, data=None) -> dict:
+            if data is None:
+                data = {}
             return {
                 'ks': self.sessionData.ks,
                 'partnerId': self.sessionData.partnerId,
@@ -94,67 +132,82 @@ class KalturaClient:
     
     class SessionService(KalturaServiceBase):
         def startWidgetSession(self, widgetId: str, expiry: int):
-            res = requests.post(KalturaClient.kurl('session/action/startWidgetSession'), json={
+            res = self.client.post_json('session/action/startWidgetSession', {
                 'expiry': expiry,
                 'widgetId': widgetId
-            }).json()
+            })
             self.client.sessionData = KalturaClient.SessionData(res)
             return self.client.sessionData
 
     class AppTokenService(KalturaServiceBase):
         def startSession (self, id, tokenHash):
-            res = requests.post(KalturaClient.kurl('apptoken/action/startSession'), json=self.client.getRequestData({
+            res = self.client.post_json('apptoken/action/startSession', self.client.getRequestData({
                 'id': id,
                 'tokenHash': tokenHash
-            })).json()
+            }))
             self.client.sessionData = KalturaClient.SessionData(res)
             return self.client.sessionData
         
     class UploadTokenService(KalturaServiceBase):
         def add (self, uploadToken):
-            res = requests.post(KalturaClient.kurl('uploadtoken/action/add'), json=self.client.getRequestData()).json()
-            return KalturaUploadToken(id=res['id'])
+            res = self.client.post_json('uploadtoken/action/add', self.client.getRequestData())
+            token = KalturaUploadToken.fromJsonResponse(res)
+            if token.uploadUrl:
+                self.client.upload_urls[token.id] = token.uploadUrl
+            return token
         
         def upload (self, uploadTokenId, fileData, resume, finalChunk, resumeAt):
-            url = KalturaClient.kurl(
-                'uploadtoken/action/upload', 
-                uploadTokenId=uploadTokenId, 
-                resume='true' if resume else 'false',
-                finalChunk='true' if finalChunk else 'false',
-                resumeAt=resumeAt,
-                ks=self.client.sessionData.ks,
-                partnerId=self.client.sessionData.partnerId
+            query = (
+                f'uploadTokenId={uploadTokenId}'
+                f'&resume={"true" if resume else "false"}'
+                f'&finalChunk={"true" if finalChunk else "false"}'
+                f'&resumeAt={resumeAt}'
+                f'&ks={self.client.sessionData.ks}'
+                f'&partnerId={self.client.sessionData.partnerId}'
             )
-            res = requests.post(url, files={
-                'fileData': fileData
-            }).json()
-            return {}
+
+            upload_url = self.client.upload_urls.get(uploadTokenId, None)
+            if upload_url:
+                separator = '&' if '?' in upload_url else '?'
+                url = f'{upload_url}{separator}{query}'
+            else:
+                url = KalturaClient.kurl('uploadtoken/action/upload', **{
+                    'uploadTokenId': uploadTokenId,
+                    'resume': 'true' if resume else 'false',
+                    'finalChunk': 'true' if finalChunk else 'false',
+                    'resumeAt': resumeAt,
+                    'ks': self.client.sessionData.ks,
+                    'partnerId': self.client.sessionData.partnerId,
+                })
+
+            res = self.client.post_upload(url, fileData)
+            return KalturaUploadToken.fromJsonResponse(res)
         
     class MediaService(KalturaServiceBase):
         def add (self, mediaEntry: KalturaMediaEntry):
-            res = requests.post(KalturaClient.kurl('media/action/add'), json=self.client.getRequestData({
+            res = self.client.post_json('media/action/add', self.client.getRequestData({
                 'entry': mediaEntry.toDict()
-            })).json()
+            }))
             return KalturaMediaEntry.fromJsonResponse(res)
         
         def addContent(self, entry_id, resource):
-            res = requests.post(KalturaClient.kurl('media/action/addContent'), json=self.client.getRequestData({
+            res = self.client.post_json('media/action/addContent', self.client.getRequestData({
                 'entryId': entry_id,
                 'resource': resource.toDict()
-            })).json()
-            return {}
+            }))
+            return res
         
     class UserService(KalturaServiceBase):
         def getByLoginId(self, loginId) -> KalturaUser:
-            res = requests.post(KalturaClient.kurl('user/action/getByLoginId'), json=self.client.getRequestData({
+            res = self.client.post_json('user/action/getByLoginId', self.client.getRequestData({
                 'loginId': loginId
-            })).json()
+            }))
             return KalturaUser.fromJsonResponse(res)
         
         def get(self, userId) -> KalturaUser:
-            res = requests.post(KalturaClient.kurl('user/action/get'), json=self.client.getRequestData({
+            res = self.client.post_json('user/action/get', self.client.getRequestData({
                 'userId': userId
-            })).json()
+            }))
             return KalturaUser.fromJsonResponse(res)
     
     class SessionData:
@@ -171,3 +224,4 @@ class KalturaClient:
          self.user = self.UserService(self)
          self.config = config
          self.sessionData = None
+         self.upload_urls: dict[str, str] = {}
