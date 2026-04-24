@@ -57,7 +57,7 @@ If `pip install -r requirements.txt` behaves strangely, check the file encoding 
 ## Known Maintenance Traps
 
 - Older versions of this repo treated inline config comments as part of the value. The parser now supports inline comments, but plain values are still easier to audit in production configs.
-- One pytest currently fails on macOS/Linux because it asserts a Windows-style path string inside `unit_test.py`.
+- The pytest suite is currently green on macOS with `.venv/bin/python -m pytest -q`.
 - The README that came with the repo was written for an older workflow and has been refreshed, but the code still has several Windows-era assumptions worth preserving carefully.
 - The parser and spreadsheet logic are not highly defensive. Unexpected instructor formatting or renamed columns are likely to fail loudly.
 

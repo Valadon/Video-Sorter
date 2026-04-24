@@ -14,6 +14,7 @@ from format_parser import *
 from collections.abc import Callable
 from file_reaper import reap_files
 
+MEETING_START_TIME_PATTERN = re.compile(r'\b\d{1,2}:\d{2}(?:am|pm)\b|\b\d{1,2}(?:am|pm)\b', re.IGNORECASE)
 MEETING_DAY_PATTERN = re.compile(r'TTh|Th|Su|Sa|M|T|W|F')
 MEETING_DAY_MAP = {
     'M': {'Monday'},
@@ -34,12 +35,30 @@ RECORDING_START_TOLERANCE = timedelta(minutes=config.getint('Settings', 'start_t
 
 def parse_meeting_days(meeting_pattern: str) -> set[str]:
     days: set[str] = set()
-    for token in MEETING_DAY_PATTERN.findall(meeting_pattern):
-        days.update(MEETING_DAY_MAP[token])
+
+    for segment in str(meeting_pattern).split(';'):
+        start_time_match = MEETING_START_TIME_PATTERN.search(segment)
+        if start_time_match is None:
+            continue
+
+        day_text = segment[:start_time_match.start()].strip()
+        position = 0
+        while position < len(day_text):
+            if day_text[position].isspace():
+                position += 1
+                continue
+
+            token_match = MEETING_DAY_PATTERN.match(day_text, position)
+            if token_match is None:
+                break
+
+            days.update(MEETING_DAY_MAP[token_match.group()])
+            position = token_match.end()
+
     return days
 
 def parse_start_time(meeting_pattern: str) -> time | None:
-    start_time_match = re.search(r'\b\d{1,2}:\d{2}(?:am|pm)\b|\b\d{1,2}(?:am|pm)\b', meeting_pattern, re.IGNORECASE)
+    start_time_match = MEETING_START_TIME_PATTERN.search(meeting_pattern)
     if start_time_match is None:
         return None
 
@@ -73,7 +92,8 @@ def parse_instructors(raw_instructors, course_number: str, section_number: str) 
 def read_courses(excel_path) -> list[Course]:
     """
     Reads a list of courses from an excel file and parses them to Course objects. 
-    For an example of how this excel file should look, see test_courses.xlsx
+    For examples of how this excel file should look, see test_courses.xlsx and
+    docs/examples/course_schedule_example.xlsx.
     """
     courses: list[Course] = []
     df = pd.read_excel(excel_path)

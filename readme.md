@@ -17,6 +17,8 @@ The sorter depends on three local inputs:
 
 For `Upload` mode it also needs a repo-root `.env` file with Kaltura credentials.
 
+A sanitized schedule workbook example is available at [docs/examples/course_schedule_example.xlsx](docs/examples/course_schedule_example.xlsx), with field notes in [docs/COURSE_SHEET_INPUT.md](docs/COURSE_SHEET_INPUT.md).
+
 ## Setup
 
 ### 1. Create a virtual environment
@@ -68,10 +70,9 @@ The tests depend on:
 - `test_courses.xlsx`
 - the folder structure configured by `[Paths].test_folder`
 
-Status verified locally on April 21, 2026:
+Status verified locally on April 24, 2026:
 
-- 17 tests passed
-- 1 test failed because it hard-codes a Windows-style path expectation and does not pass on macOS/Linux
+- 29 tests passed
 
 ## Build To Executable
 
@@ -85,21 +86,24 @@ Build with:
 
 ## Schedule Spreadsheet Expectations
 
-The current importer expects columns including:
+The current importer expects a registrar-style Excel workbook with columns including:
 
 - `Course`
 - `Section #`
 - `Course Title`
 - `Meeting Pattern`
+- `Meetings`
 - `Instructor LAST`
 - `Room (cleaned)`
 - `Instructor`
+- `Room`
 
 Operational notes:
 
 - `Room (cleaned)` should contain the bare room number
 - `Meeting Pattern` needs to contain recognizable day/time text
 - `Instructor` is parsed using a strict `LAST, FIRST (00123456)` pattern
+- `Does Not Meet` rows import successfully, but they do not participate in room/time matching
 
 ## Supported Recording Sources
 

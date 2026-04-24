@@ -93,11 +93,14 @@ The code directly depends on:
 - `Instructor` for parsing people and uNIDs
 - `Course` plus `Section #` for CaptureCast matching
 
+See [COURSE_SHEET_INPUT.md](COURSE_SHEET_INPUT.md) and [examples/course_schedule_example.xlsx](examples/course_schedule_example.xlsx) for a sanitized workbook that mirrors the current export shape.
+
 The current parsing is brittle by design:
 
 - day parsing is regex-based
 - start time is extracted from free-form text
 - instructor parsing assumes `LAST, FIRST (00123456)` formatting
+- rows such as `Does Not Meet` import, but they are skipped by room/time matching because they do not have start times
 
 If the registrar/export format changes, this function is one of the first places to inspect.
 
@@ -277,18 +280,10 @@ The repo has a meaningful pytest suite in `unit_test.py`. It covers:
 - full `process_existing_files()` behavior
 - reaper behavior
 
-Local verification on April 21, 2026:
+Local verification on April 24, 2026:
 
 - command run: `.venv/bin/python -m pytest -q`
-- result: `17 passed, 1 failed`
-
-The one failing test is platform-specific:
-
-- `unit_test.py::TestSorter::test_matched_video_moving_extron_absolute_path`
-- it asserts a Windows-style path string with backslashes inside `os.path.join(...)`
-- on macOS/Linux, the destination file exists at the POSIX path, but not at the mixed Windows literal used by the test
-
-So the current codebase is close to green, but not fully cross-platform in test expectations.
+- result: `29 passed`
 
 ## Current Sharp Edges
 

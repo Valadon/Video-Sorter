@@ -1,6 +1,7 @@
 import os
 import configparser
 import io
+import tempfile
 import pandas as pd
 import pytest
 config = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
@@ -9,7 +10,7 @@ config.read('config.ini')
 from data_types import *
 from mock_kaltura_client import KalturaApiError, KalturaClient, KalturaConfiguration
 import video_sorter
-from video_sorter import read_courses, match_courses_to_recordings, move_video, get_new_filepath, process_existing_files, find_course_by_room_and_datetime, upload_files
+from video_sorter import read_courses, match_courses_to_recordings, move_video, get_new_filepath, process_existing_files, find_course_by_room_and_datetime, upload_files, parse_meeting_days, parse_start_time
 from file_reaper import reap_files
 
 def clear_directory(directory_path):
@@ -79,6 +80,9 @@ def generate_files (recs: list[LectureRecording], numBytes=4):
 
 def read_test_courses ():
     return read_courses(os.path.join(os.path.curdir, 'test_courses.xlsx'))
+
+def read_example_courses ():
+    return read_courses(os.path.join(os.path.curdir, 'docs', 'examples', 'course_schedule_example.xlsx'))
 
 def get_test_recs ():
     return {
@@ -313,6 +317,40 @@ class TestSorter:
 
         assert courses[0].days == {'Thursday'}
 
+    def test_does_not_meet_meeting_pattern_has_no_days_or_start_time(self):
+        assert parse_meeting_days('Does Not Meet') == set()
+        assert parse_start_time('Does Not Meet') is None
+
+    def test_course_sheet_example_imports_current_export_shape(self):
+        courses = read_example_courses()
+
+        assert len(courses) == 5
+        assert courses[0].number == 'LAW 1010'
+        assert courses[0].section_number == '1'
+        assert courses[0].room_number == '2100'
+        assert courses[0].days == {'Tuesday', 'Thursday'}
+        assert courses[0].start_time == time(7, 30)
+        assert courses[1].days == {'Monday', 'Tuesday', 'Thursday'}
+        assert courses[2].days == {'Wednesday', 'Friday'}
+        assert [host.last for host in courses[2].hosts] == ['SMITH', 'JONES']
+        assert courses[3].days == {'Friday', 'Saturday'}
+        assert courses[4].days == set()
+        assert courses[4].start_time is None
+
+    def test_course_sheet_example_matches_realistic_extron_filename(self):
+        courses = read_example_courses()
+
+        with tempfile.TemporaryDirectory() as watch:
+            filepath = os.path.join(watch, '2100_20260106-1_20260106-073000_S1R1.mp4')
+            with open(filepath, 'wb') as f:
+                f.write(b'test')
+
+            pairs = match_courses_to_recordings(courses, watch)
+
+        assert len(pairs) == 1
+        assert pairs[0][1].number == 'LAW 1010'
+        assert pairs[0][1].section_number == '1'
+
     def test_unknown_recording_is_not_marked_scheduled(self):
         rec = LectureRecording('unknown.mp4', None, None, None, None)
         assert rec.was_scheduled() is False
@@ -336,6 +374,7 @@ class TestSorter:
 
         assert os.path.exists(source_path)
         assert count_nondirectory_files(destination) == 0
+        clear_test_folder()
 
     def test_config_parser_supports_inline_comments(self):
         cfg = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
