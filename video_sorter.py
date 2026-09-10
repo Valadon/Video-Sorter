@@ -4,6 +4,7 @@ import re
 import argparse
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 from time import sleep
 import logging
 import shutil
@@ -975,12 +976,22 @@ def _parse_command_line(argv=None):
     parser.add_argument(
         '--owner',
         metavar='ID',
-        help='Kaltura owner ID required by --find-media',
+        help='Kaltura owner ID required by --find-media and --resume-upload-bytes',
     )
     parser.add_argument(
         '--verify-uploads',
         action='store_true',
         help='verify journaled Kaltura entry IDs against the live service (read-only)',
+    )
+    parser.add_argument(
+        '--verify-upload-tokens',
+        action='store_true',
+        help='show live status and byte counts for journaled upload tokens (read-only)',
+    )
+    parser.add_argument(
+        '--resume-upload-bytes',
+        metavar='SHA_PREFIX',
+        help='explicitly resume one eligible byte-stage receipt selected by hash and --owner',
     )
     parser.add_argument(
         '--validate-schedule',
@@ -1025,6 +1036,15 @@ def _one_line(value) -> str:
     if value is None or value == '':
         return '-'
     return str(value).replace('\r', r'\r').replace('\n', r'\n')
+
+
+def _upload_hostname(upload_url) -> str:
+    if not upload_url:
+        return '-'
+    try:
+        return urlsplit(str(upload_url)).hostname or '-'
+    except ValueError:
+        return 'invalid'
 
 
 def _print_media_entry(entry) -> None:
@@ -1084,6 +1104,155 @@ def verify_uploads(config_path) -> int:
                 file=sys.stderr,
             )
     return 1 if failure_count else 0
+
+
+def verify_upload_tokens(config_path) -> int:
+    journal_path = Path(config_path).resolve().parent / 'upload_journal.sqlite3'
+    if not journal_path.exists():
+        print(f'Upload journal does not exist: {journal_path}', file=sys.stderr)
+        return 1
+
+    with UploadJournal(str(journal_path)) as journal:
+        receipts = [
+            receipt for receipt in journal.list_receipts()
+            if receipt.upload_token_id
+        ]
+    print(f'Journaled upload tokens: {len(receipts)}')
+    if not receipts:
+        return 0
+
+    try:
+        client = get_kaltura_client()
+    except Exception as error:
+        print(f'Kaltura token verification login failed: {error}', file=sys.stderr)
+        return 1
+
+    failure_count = 0
+    for receipt in receipts:
+        fingerprint = f'{receipt.source_sha256[:12]}...'
+        try:
+            token = client.uploadToken.get(receipt.upload_token_id)
+            print(
+                f'fingerprint={fingerprint} '
+                f'entry={_one_line(receipt.entry_id)} '
+                f'source={_one_line(receipt.source_name)} '
+                f'owner={_one_line(receipt.owner_id)} '
+                f'state={_one_line(receipt.state)} '
+                f'status={_one_line(getattr(token, "status", None))} '
+                f'fileSize={_one_line(getattr(token, "fileSize", None))} '
+                f'uploadedFileSize={_one_line(getattr(token, "uploadedFileSize", None))} '
+                f'uploadHost={_upload_hostname(getattr(token, "uploadUrl", None))} '
+                f'updatedAt={_one_line(getattr(token, "updatedAt", None))}'
+            )
+        except Exception as error:
+            failure_count += 1
+            print(
+                f'fingerprint={fingerprint} entry={_one_line(receipt.entry_id)} '
+                f'source={_one_line(receipt.source_name)} '
+                f'owner={_one_line(receipt.owner_id)} '
+                f'verification_failed={type(error).__name__}: {_one_line(error)}',
+                file=sys.stderr,
+            )
+    return 1 if failure_count else 0
+
+
+def resume_upload_bytes(config, config_path, sha_prefix: str, owner_id: str) -> int:
+    normalized_prefix = sha_prefix.strip().casefold()
+    if not re.fullmatch(r'[0-9a-f]{8,64}', normalized_prefix):
+        print(
+            'SHA_PREFIX must contain 8 to 64 hexadecimal characters.',
+            file=sys.stderr,
+        )
+        return 2
+
+    journal_path = Path(config_path).resolve().parent / 'upload_journal.sqlite3'
+    if not journal_path.exists():
+        print(f'Upload journal does not exist: {journal_path}', file=sys.stderr)
+        return 1
+
+    with UploadJournal(str(journal_path)) as journal:
+        matches = [
+            receipt for receipt in journal.list_receipts()
+            if receipt.owner_id == owner_id
+            and receipt.source_sha256.casefold().startswith(normalized_prefix)
+        ]
+        if len(matches) != 1:
+            print(
+                f'Expected exactly one receipt for fingerprint {normalized_prefix} '
+                f'and owner {owner_id}; found {len(matches)}.',
+                file=sys.stderr,
+            )
+            return 2
+
+        receipt = matches[0]
+        if not receipt_allows_bytes_resume(receipt):
+            print(
+                f'Receipt {receipt.source_sha256[:12]}... for owner {owner_id} '
+                f'is not eligible for bytes-only resume (state={receipt.state}).',
+                file=sys.stderr,
+            )
+            return 1
+
+        if Path(receipt.source_name).name != receipt.source_name:
+            print('Journaled source name is not a safe filename.', file=sys.stderr)
+            return 1
+
+        watch_folder = Path(
+            os.path.abspath(os.path.normpath(config.get('Paths', 'watch_folder')))
+        ).resolve()
+        source_path = (watch_folder / receipt.source_name).resolve()
+        if source_path.parent != watch_folder or not source_path.is_file():
+            print(
+                f'Journaled source file is missing from the watch folder: '
+                f'{receipt.source_name}',
+                file=sys.stderr,
+            )
+            return 1
+        source_size = source_path.stat().st_size
+        if receipt.source_size is not None and receipt.source_size != source_size:
+            print(
+                f'Journaled source size does not match {receipt.source_name}: '
+                f'expected {receipt.source_size}, found {source_size}.',
+                file=sys.stderr,
+            )
+            return 1
+
+        fingerprint = f'{receipt.source_sha256[:12]}...'
+
+        def report_progress(confirmed_bytes: int, total_bytes: int) -> None:
+            percent = 100 if total_bytes == 0 else int(
+                confirmed_bytes * 100 / total_bytes
+            )
+            print(
+                f'progress fingerprint={fingerprint} source={receipt.source_name} '
+                f'owner={owner_id} confirmed_bytes={confirmed_bytes} '
+                f'source_bytes={total_bytes} percent={percent}'
+            )
+
+        try:
+            client = get_kaltura_client()
+            result = resume_upload_bytes_only(
+                str(source_path),
+                owner_id,
+                client,
+                journal,
+                receipt.source_sha256,
+                progress=report_progress,
+            )
+        except Exception as error:
+            print(
+                f'Bytes-only resume failed for fingerprint={fingerprint} '
+                f'source={receipt.source_name} owner={owner_id}: {_one_line(error)}',
+                file=sys.stderr,
+            )
+            return 1
+
+    print(
+        f'Bytes confirmed: fingerprint={fingerprint} source={receipt.source_name} '
+        f'owner={owner_id} state={result.state} '
+        f'confirmed_bytes={result.confirmed_bytes} source_bytes={result.source_size}'
+    )
+    return 0
 
 
 def _process_operational_pass(
@@ -1245,13 +1414,37 @@ def main(argv=None):
         load_config_environment(config_path)
         return find_media(args.find_media, args.owner)
 
+    if args.resume_upload_bytes is not None:
+        if not args.owner:
+            print('--resume-upload-bytes requires --owner ID.', file=sys.stderr)
+            return 2
+        try:
+            with SingleInstanceLock(lock_path_for_config(config_path)):
+                load_config_environment(config_path)
+                return resume_upload_bytes(
+                    runtime_config,
+                    config_path,
+                    args.resume_upload_bytes,
+                    args.owner,
+                )
+        except AlreadyRunningError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+
     if args.owner:
-        print('--owner is only valid with --find-media.', file=sys.stderr)
+        print(
+            '--owner is only valid with --find-media or --resume-upload-bytes.',
+            file=sys.stderr,
+        )
         return 2
 
     if args.verify_uploads:
         load_config_environment(config_path)
         return verify_uploads(config_path)
+
+    if args.verify_upload_tokens:
+        load_config_environment(config_path)
+        return verify_upload_tokens(config_path)
 
     if args.validate_schedule is not None:
         if runtime_config.has_option('Paths', 'excel_file'):

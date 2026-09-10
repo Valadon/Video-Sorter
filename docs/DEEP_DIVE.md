@@ -300,6 +300,25 @@ video_sorter.py --config /path/to/config.ini --verify-uploads
 
 The first command performs an exact name-and-owner search. The second reads every entry ID in the upload journal and fetches its current Kaltura record. Both print only the entry ID, name, owner, status, and duration. They do not upload, attach, move, or delete recordings, and they do not take the processing lock, so an operator can run them while the sorter is active.
 
+For interrupted byte transfers, inspect the recorded tokens without exposing their IDs:
+
+```bash
+video_sorter.py --config /path/to/config.ini --verify-upload-tokens
+```
+
+This command prints the source SHA-256 fingerprint, entry ID when present, source name, owner, receipt state, live token status, remote file size, remote uploaded byte count, update time, and upload hostname. The hostname is extracted from Kaltura's upload URL; its path, query, and user information are discarded. The command loads the selected config's credentials for the read-only Kaltura lookup but does not take the process lock.
+
+An operator may then resume one byte-stage receipt explicitly:
+
+```bash
+video_sorter.py --config /path/to/config.ini \
+  --resume-upload-bytes SHA_PREFIX --owner u1234567
+```
+
+The prefix must be 8 to 64 hexadecimal characters and resolve to exactly one receipt for that owner. This command takes the same single-instance lock as normal processing. Before contacting Kaltura, it requires the journaled source filename in the configured watch folder and checks its recorded size. The uploader verifies the complete SHA-256, asks Kaltura for the recorded token's authoritative byte offset, and resumes in 10,240,000-byte chunks. Each confirmed offset is written to the journal and printed with a percentage so an operator can monitor a large file.
+
+The recovery command reuses the recorded token and returns only after the receipt reaches `bytes_uploaded`. It never creates a token, media entry, or attachment. Only `bytes_submitting` receipts and `manual_reconcile` receipts explicitly marked as byte-stage ambiguity are eligible. States such as `entry_creating` and `attaching` remain blocked for manual reconciliation because retrying them could create duplicate media.
+
 ## Retention / Reaper
 
 `file_reaper.py` recursively deletes files older than the cutoff and removes directories once they become empty.

@@ -83,9 +83,19 @@ These read-only checks are available:
 .venv/bin/python video_sorter.py --config /path/to/config.ini --upload-status
 .venv/bin/python video_sorter.py --config /path/to/config.ini --find-media "Exact Media Name" --owner u1234567
 .venv/bin/python video_sorter.py --config /path/to/config.ini --verify-uploads
+.venv/bin/python video_sorter.py --config /path/to/config.ini --verify-upload-tokens
 ```
 
-`--version` prints the app version and embedded build identity without reading config or credentials. `--upload-status` lists the durable per-owner receipts beside the selected config without loading credentials. `--find-media` performs an exact Kaltura name-and-owner lookup, while `--verify-uploads` checks every journaled entry ID against Kaltura. The reports show safe media fields and whether a token was recorded, but never print token values or process recordings.
+`--version` prints the app version and embedded build identity without reading config or credentials. `--upload-status` lists the durable per-owner receipts beside the selected config without loading credentials. `--find-media` performs an exact Kaltura name-and-owner lookup, while `--verify-uploads` checks every journaled entry ID against Kaltura. `--verify-upload-tokens` shows each receipt's 12-character fingerprint and the live Kaltura token status, file size, uploaded byte count, update time, and upload hostname. It strips the upload URL's path, query, and user information. These reports never print upload-token IDs or process recordings.
+
+If token verification shows an interrupted byte upload, an operator can resume exactly one eligible receipt:
+
+```bash
+.venv/bin/python video_sorter.py --config /path/to/config.ini \
+  --resume-upload-bytes SHA_PREFIX --owner u1234567
+```
+
+The SHA prefix must contain at least eight hexadecimal characters and must identify exactly one receipt for that owner. The command takes the normal process lock, verifies that the original watch-folder file has the journaled name, size, and SHA-256, then resumes the recorded token in 10,240,000-byte chunks. It prints confirmed-byte progress after each accepted chunk and stops in `bytes_uploaded`. It cannot create or attach a media entry. Receipts that may already have created or attached media are never eligible.
 
 ## Running Tests
 

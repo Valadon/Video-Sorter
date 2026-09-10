@@ -34,9 +34,11 @@ class UploadReceipt:
     source_sha256: str
     owner_id: str
     source_name: str
+    source_size: int | None
     state: str
     upload_token_id: str | None
     entry_id: str | None
+    confirmed_bytes: int
     detail: str | None
     updated_at: str
 
@@ -66,15 +68,32 @@ class UploadJournal:
                 source_sha256 TEXT NOT NULL,
                 owner_id TEXT NOT NULL,
                 source_name TEXT NOT NULL,
+                source_size INTEGER,
                 state TEXT NOT NULL,
                 upload_token_id TEXT,
                 entry_id TEXT,
+                confirmed_bytes INTEGER NOT NULL DEFAULT 0,
                 detail TEXT,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (source_sha256, owner_id)
             )
             '''
         )
+        columns = {
+            row['name']
+            for row in self._connection.execute(
+                'PRAGMA table_info(upload_receipts)'
+            ).fetchall()
+        }
+        if 'source_size' not in columns:
+            self._connection.execute(
+                'ALTER TABLE upload_receipts ADD COLUMN source_size INTEGER'
+            )
+        if 'confirmed_bytes' not in columns:
+            self._connection.execute(
+                'ALTER TABLE upload_receipts '
+                'ADD COLUMN confirmed_bytes INTEGER NOT NULL DEFAULT 0'
+            )
         self._connection.commit()
 
     def close(self):
@@ -97,8 +116,8 @@ class UploadJournal:
     def get(self, source_sha256: str, owner_id: str) -> UploadReceipt | None:
         row = self._connection.execute(
             '''
-            SELECT source_sha256, owner_id, source_name, state,
-                   upload_token_id, entry_id, detail, updated_at
+            SELECT source_sha256, owner_id, source_name, source_size, state,
+                   upload_token_id, entry_id, confirmed_bytes, detail, updated_at
             FROM upload_receipts
             WHERE source_sha256 = ? AND owner_id = ?
             ''',
@@ -111,8 +130,8 @@ class UploadJournal:
             raise ValueError(f'Unknown upload receipt state: {state}')
 
         query = (
-            'SELECT source_sha256, owner_id, source_name, state, '
-            'upload_token_id, entry_id, detail, updated_at '
+            'SELECT source_sha256, owner_id, source_name, source_size, state, '
+            'upload_token_id, entry_id, confirmed_bytes, detail, updated_at '
             'FROM upload_receipts'
         )
         parameters = ()
@@ -130,17 +149,35 @@ class UploadJournal:
         source_sha256: str,
         owner_id: str,
         source_name: str,
+        source_size: int | None = None,
     ) -> UploadReceipt:
         now = self._timestamp()
         with self._connection:
             self._connection.execute(
                 '''
                 INSERT OR IGNORE INTO upload_receipts (
-                    source_sha256, owner_id, source_name, state, updated_at
-                ) VALUES (?, ?, ?, ?, ?)
+                    source_sha256, owner_id, source_name, source_size,
+                    state, confirmed_bytes, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 0, ?)
                 ''',
-                (source_sha256, owner_id, source_name, STATE_NEW, now),
+                (
+                    source_sha256,
+                    owner_id,
+                    source_name,
+                    source_size,
+                    STATE_NEW,
+                    now,
+                ),
             )
+            if source_size is not None:
+                self._connection.execute(
+                    '''
+                    UPDATE upload_receipts
+                    SET source_size = COALESCE(source_size, ?)
+                    WHERE source_sha256 = ? AND owner_id = ?
+                    ''',
+                    (source_size, source_sha256, owner_id),
+                )
         return self.get(source_sha256, owner_id)
 
     def update(
@@ -151,6 +188,8 @@ class UploadJournal:
         *,
         upload_token_id: str | None = None,
         entry_id: str | None = None,
+        source_size: int | None = None,
+        confirmed_bytes: int | None = None,
         detail: str | None = None,
     ) -> UploadReceipt:
         if state not in VALID_STATES:
@@ -163,17 +202,32 @@ class UploadJournal:
             upload_token_id if upload_token_id is not None else current.upload_token_id
         )
         next_entry_id = entry_id if entry_id is not None else current.entry_id
+        next_source_size = source_size if source_size is not None else current.source_size
+        next_confirmed_bytes = (
+            confirmed_bytes
+            if confirmed_bytes is not None
+            else current.confirmed_bytes
+        )
+        if next_source_size is not None and next_source_size < 0:
+            raise ValueError('source_size cannot be negative')
+        if next_confirmed_bytes < 0:
+            raise ValueError('confirmed_bytes cannot be negative')
+        if next_source_size is not None and next_confirmed_bytes > next_source_size:
+            raise ValueError('confirmed_bytes cannot exceed source_size')
         with self._connection:
             self._connection.execute(
                 '''
                 UPDATE upload_receipts
-                SET state = ?, upload_token_id = ?, entry_id = ?, detail = ?, updated_at = ?
+                SET state = ?, upload_token_id = ?, entry_id = ?,
+                    source_size = ?, confirmed_bytes = ?, detail = ?, updated_at = ?
                 WHERE source_sha256 = ? AND owner_id = ?
                 ''',
                 (
                     state,
                     next_upload_token_id,
                     next_entry_id,
+                    next_source_size,
+                    next_confirmed_bytes,
                     detail,
                     self._timestamp(),
                     source_sha256,

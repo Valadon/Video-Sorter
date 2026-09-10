@@ -1,7 +1,13 @@
 from types import SimpleNamespace
 
 from runtime_guard import SingleInstanceLock, lock_path_for_config
-from upload_journal import STATE_ATTACHED, UploadJournal
+from upload_journal import (
+    STATE_ATTACHED,
+    STATE_BYTES_SUBMITTING,
+    STATE_BYTES_UPLOADED,
+    STATE_ENTRY_CREATING,
+    UploadJournal,
+)
 import video_sorter
 
 
@@ -137,3 +143,143 @@ def test_verify_uploads_reads_each_journaled_entry_from_kaltura(
     assert get_calls == ['entry-123']
     assert 'id=entry-123 name=Recorded Class owner=u00100001 status=2 duration=3600' in output
     assert 'hidden-token' not in output
+
+
+def test_verify_upload_tokens_prints_safe_status_without_token_ids(
+    tmp_path, monkeypatch, capsys
+):
+    config_path = tmp_path / 'config.ini'
+    monkeypatch.setattr(video_sorter, 'load_runtime_config', lambda _: SimpleNamespace())
+    monkeypatch.setattr(video_sorter, 'load_config_environment', lambda _: True)
+    with UploadJournal(str(tmp_path / 'upload_journal.sqlite3')) as journal:
+        journal.get_or_create(
+            'b' * 64, 'u00100001', 'recording.mp4', source_size=123456
+        )
+        journal.update(
+            'b' * 64, 'u00100001', 'bytes_submitting',
+            upload_token_id='hidden-upload-token', confirmed_bytes=65536,
+        )
+    token_get_calls = []
+    token = SimpleNamespace(
+        status=0,
+        fileSize=123456,
+        uploadedFileSize=65536,
+        uploadUrl='https://upload.example.edu/path?ks=hidden-query-value',
+        updatedAt=1789052400,
+    )
+    upload_token_service = SimpleNamespace(
+        get=lambda token_id: token_get_calls.append(token_id) or token
+    )
+    monkeypatch.setattr(
+        video_sorter,
+        'get_kaltura_client',
+        lambda: SimpleNamespace(uploadToken=upload_token_service),
+    )
+
+    result = video_sorter.main([
+        '--config', str(config_path), '--verify-upload-tokens'
+    ])
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert token_get_calls == ['hidden-upload-token']
+    assert 'fingerprint=bbbbbbbbbbbb...' in output
+    assert 'entry=- source=recording.mp4 owner=u00100001' in output
+    assert 'status=0 fileSize=123456 uploadedFileSize=65536' in output
+    assert 'uploadHost=upload.example.edu updatedAt=1789052400' in output
+    assert 'hidden-upload-token' not in output
+    assert 'hidden-query-value' not in output
+
+
+def test_resume_upload_bytes_selects_one_receipt_and_reports_progress(
+    tmp_path, monkeypatch, capsys
+):
+    config_path = tmp_path / 'config.ini'
+    watch_folder = tmp_path / 'watch'
+    watch_folder.mkdir()
+    source = watch_folder / 'recording.mp4'
+    source.write_bytes(b'bytes to resume')
+    runtime_config = SimpleNamespace(
+        get=lambda section, key: str(watch_folder)
+        if (section, key) == ('Paths', 'watch_folder')
+        else None
+    )
+    monkeypatch.setattr(video_sorter, 'load_runtime_config', lambda _: runtime_config)
+    monkeypatch.setattr(video_sorter, 'load_config_environment', lambda _: True)
+    source_hash = 'c' * 64
+    with UploadJournal(str(tmp_path / 'upload_journal.sqlite3')) as journal:
+        journal.get_or_create(
+            source_hash, 'u00100001', source.name, source_size=source.stat().st_size
+        )
+        journal.update(
+            source_hash, 'u00100001', STATE_BYTES_SUBMITTING,
+            upload_token_id='hidden-upload-token', confirmed_bytes=3,
+        )
+
+    client = object()
+    monkeypatch.setattr(video_sorter, 'get_kaltura_client', lambda: client)
+    resume_calls = []
+
+    def fake_resume(path, owner, passed_client, journal, sha, *, progress):
+        resume_calls.append((path, owner, passed_client, sha))
+        progress(3, source.stat().st_size)
+        progress(source.stat().st_size, source.stat().st_size)
+        return journal.update(
+            sha,
+            owner,
+            STATE_BYTES_UPLOADED,
+            confirmed_bytes=source.stat().st_size,
+        )
+
+    monkeypatch.setattr(video_sorter, 'resume_upload_bytes_only', fake_resume)
+
+    result = video_sorter.main([
+        '--config', str(config_path), '--resume-upload-bytes', source_hash[:12],
+        '--owner', 'u00100001',
+    ])
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert resume_calls == [(str(source), 'u00100001', client, source_hash)]
+    assert 'progress fingerprint=cccccccccccc...' in output
+    assert f'confirmed_bytes={source.stat().st_size}' in output
+    assert 'state=bytes_uploaded' in output
+    assert 'hidden-upload-token' not in output
+
+
+def test_resume_upload_bytes_refuses_entry_stage_receipt(
+    tmp_path, monkeypatch, capsys
+):
+    config_path = tmp_path / 'config.ini'
+    watch_folder = tmp_path / 'watch'
+    watch_folder.mkdir()
+    source = watch_folder / 'recording.mp4'
+    source.write_bytes(b'already past byte stage')
+    runtime_config = SimpleNamespace(
+        get=lambda section, key: str(watch_folder)
+    )
+    monkeypatch.setattr(video_sorter, 'load_runtime_config', lambda _: runtime_config)
+    monkeypatch.setattr(video_sorter, 'load_config_environment', lambda _: True)
+    source_hash = 'd' * 64
+    with UploadJournal(str(tmp_path / 'upload_journal.sqlite3')) as journal:
+        journal.get_or_create(
+            source_hash, 'u00100001', source.name, source_size=source.stat().st_size
+        )
+        journal.update(
+            source_hash, 'u00100001', STATE_ENTRY_CREATING,
+            upload_token_id='hidden-upload-token', confirmed_bytes=source.stat().st_size,
+        )
+
+    monkeypatch.setattr(
+        video_sorter,
+        'get_kaltura_client',
+        lambda: (_ for _ in ()).throw(AssertionError('must not contact Kaltura')),
+    )
+
+    result = video_sorter.main([
+        '--config', str(config_path), '--resume-upload-bytes', source_hash[:12],
+        '--owner', 'u00100001',
+    ])
+
+    assert result == 1
+    assert 'not eligible for bytes-only resume' in capsys.readouterr().err

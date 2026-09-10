@@ -1,5 +1,6 @@
 from datetime import date, time
 import io
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -7,7 +8,11 @@ import requests
 
 from data_types import Course, EventHost, LectureRecording
 from kaltura_uploader import (
+    BYTE_RECONCILE_PREFIX,
     UploadNeedsManualReconciliation,
+    _upload_bytes_in_chunks,
+    receipt_allows_bytes_resume,
+    resume_upload_bytes_only,
     upload_video,
 )
 from mock_kaltura_client import (
@@ -17,24 +22,68 @@ from mock_kaltura_client import (
     KalturaOutcomeUnknown,
     KalturaUploadToken,
 )
-from upload_journal import STATE_ATTACHED, STATE_MANUAL_RECONCILE, UploadJournal, sha256_file
+from upload_journal import (
+    STATE_ATTACHED,
+    STATE_BYTES_SUBMITTING,
+    STATE_BYTES_UPLOADED,
+    STATE_ENTRY_CREATING,
+    STATE_MANUAL_RECONCILE,
+    STATE_TOKEN_CREATED,
+    UploadJournal,
+    sha256_file,
+)
 
 
 class FakeUploadTokenService:
     def __init__(self):
         self.add_calls = 0
         self.upload_calls = 0
+        self.chunk_calls = []
+        self.file_size = 0
+        self.uploaded_size = 0
+        self.token_id = None
 
-    def add(self, _upload_token):
+    def add(self, upload_token):
         self.add_calls += 1
-        return KalturaUploadToken(id=f'token-{self.add_calls}', status=0)
+        self.token_id = f'token-{self.add_calls}'
+        self.file_size = upload_token.fileSize
+        return self._token()
+
+    def _token(self):
+        status = 2 if self.file_size == self.uploaded_size and self.file_size else (
+            1 if self.uploaded_size else 0
+        )
+        return KalturaUploadToken(
+            id=self.token_id,
+            status=status,
+            fileSize=self.file_size,
+            uploadedFileSize=self.uploaded_size,
+        )
+
+    def get(self, upload_token_id):
+        assert upload_token_id == self.token_id
+        return self._token()
+
+    def uploadChunk(
+        self, upload_token_id, chunk_data, resume, final_chunk, resume_at
+    ):
+        assert upload_token_id == self.token_id
+        data = chunk_data.read()
+        self.chunk_calls.append((resume_at, len(data), resume, final_chunk))
+        assert resume_at == self.uploaded_size
+        self.uploaded_size += len(data)
+        return self._token()
 
     def upload(self, upload_token_id, _file_data, _resume, _final_chunk, _resume_at):
         self.upload_calls += 1
         return KalturaUploadToken(id=upload_token_id, status=2)
 
-    def waitForFullUpload(self, upload_token_id):
-        return KalturaUploadToken(id=upload_token_id, status=2)
+    def waitForFullUpload(self, upload_token_id, expected_size=None):
+        token = self.get(upload_token_id)
+        if expected_size is not None:
+            assert token.uploadedFileSize == expected_size
+        assert token.status == 2
+        return token
 
 
 class FakeMediaService:
@@ -247,6 +296,404 @@ def test_unknown_attachment_is_held_with_known_entry(upload_case):
     assert receipt.entry_id == 'entry-1'
 
 
+def prepare_chunk_receipt(tmp_path, data=b'abcdefghij', state=STATE_TOKEN_CREATED):
+    source = tmp_path / 'recording.mp4'
+    source.write_bytes(data)
+    source_hash = sha256_file(str(source))
+    journal = UploadJournal(str(tmp_path / 'chunks.sqlite3'))
+    journal.get_or_create(source_hash, 'u0000001', source.name, len(data))
+    journal.update(
+        source_hash,
+        'u0000001',
+        state,
+        upload_token_id='token-existing',
+    )
+    client = FakeClient()
+    client.uploadToken.token_id = 'token-existing'
+    client.uploadToken.file_size = len(data)
+    return source, source_hash, journal, client
+
+
+@pytest.mark.parametrize(
+    ('data', 'expected_calls'),
+    [
+        (
+            b'abcdefghij',
+            [
+                (0, 4, False, False),
+                (4, 4, True, False),
+                (8, 2, True, True),
+            ],
+        ),
+        (
+            b'abcdefgh',
+            [
+                (0, 4, False, False),
+                (4, 4, True, True),
+            ],
+        ),
+    ],
+)
+def test_chunk_upload_marks_only_last_data_chunk_final(
+    tmp_path, data, expected_calls
+):
+    source, source_hash, journal, client = prepare_chunk_receipt(tmp_path, data)
+    progress = []
+    try:
+        receipt = _upload_bytes_in_chunks(
+            str(source),
+            'u0000001',
+            client,
+            journal,
+            source_hash,
+            chunk_size=4,
+            progress=lambda confirmed, total: progress.append((confirmed, total)),
+        )
+        assert receipt.state == STATE_BYTES_UPLOADED
+        assert receipt.confirmed_bytes == len(data)
+        assert client.uploadToken.chunk_calls == expected_calls
+        assert progress[-1] == (len(data), len(data))
+    finally:
+        journal.close()
+
+
+def test_fresh_token_may_start_when_uploaded_size_is_empty(tmp_path):
+    source, source_hash, journal, client = prepare_chunk_receipt(tmp_path)
+    original_get = client.uploadToken.get
+    first_get = True
+
+    def empty_fresh_position(upload_token_id):
+        nonlocal first_get
+        token = original_get(upload_token_id)
+        if first_get:
+            first_get = False
+            token.uploadedFileSize = None
+        return token
+
+    client.uploadToken.get = empty_fresh_position
+    try:
+        receipt = _upload_bytes_in_chunks(
+            str(source),
+            'u0000001',
+            client,
+            journal,
+            source_hash,
+            chunk_size=4,
+        )
+        assert receipt.state == STATE_BYTES_UPLOADED
+        assert client.uploadToken.chunk_calls[0] == (0, 4, False, False)
+    finally:
+        journal.close()
+
+
+def test_explicit_resume_uses_authoritative_partial_offset_and_stops_at_bytes(
+    tmp_path,
+):
+    source, source_hash, journal, client = prepare_chunk_receipt(
+        tmp_path, state=STATE_BYTES_SUBMITTING
+    )
+    client.uploadToken.uploaded_size = 4
+    journal.update(
+        source_hash,
+        'u0000001',
+        STATE_BYTES_SUBMITTING,
+        confirmed_bytes=0,
+    )
+    try:
+        receipt = resume_upload_bytes_only(
+            str(source),
+            'u0000001',
+            client,
+            journal,
+            source_hash,
+        )
+        assert receipt.state == STATE_BYTES_UPLOADED
+        assert receipt.entry_id is None
+        assert client.uploadToken.chunk_calls[0] == (4, 6, True, True)
+        assert client.media.add_calls == 0
+    finally:
+        journal.close()
+
+
+def test_explicit_resume_requires_reported_uploaded_size(tmp_path):
+    source, source_hash, journal, client = prepare_chunk_receipt(
+        tmp_path, state=STATE_BYTES_SUBMITTING
+    )
+    original_get = client.uploadToken.get
+
+    def missing_position(upload_token_id):
+        token = original_get(upload_token_id)
+        token.uploadedFileSize = None
+        return token
+
+    client.uploadToken.get = missing_position
+    try:
+        with pytest.raises(
+            UploadNeedsManualReconciliation,
+            match='did not report uploadedFileSize',
+        ):
+            resume_upload_bytes_only(
+                str(source),
+                'u0000001',
+                client,
+                journal,
+                source_hash,
+            )
+        assert client.uploadToken.chunk_calls == []
+    finally:
+        journal.close()
+
+
+def test_eof_partial_token_polls_full_without_uploading_an_empty_chunk(tmp_path):
+    source, source_hash, journal, client = prepare_chunk_receipt(
+        tmp_path, state=STATE_BYTES_SUBMITTING
+    )
+    source_size = source.stat().st_size
+    client.uploadToken.uploaded_size = source_size
+    get_calls = 0
+
+    def partial_at_eof(_upload_token_id):
+        nonlocal get_calls
+        get_calls += 1
+        return KalturaUploadToken(
+            id='token-existing',
+            status=1,
+            fileSize=source_size,
+            uploadedFileSize=source_size,
+        )
+
+    def becomes_full(_upload_token_id, expected_size=None):
+        assert expected_size == source_size
+        return KalturaUploadToken(
+            id='token-existing',
+            status=2,
+            fileSize=source_size,
+            uploadedFileSize=source_size,
+        )
+
+    client.uploadToken.get = partial_at_eof
+    client.uploadToken.waitForFullUpload = becomes_full
+    try:
+        receipt = resume_upload_bytes_only(
+            str(source), 'u0000001', client, journal, source_hash
+        )
+        assert receipt.state == STATE_BYTES_UPLOADED
+        assert receipt.confirmed_bytes == source_size
+        assert client.uploadToken.chunk_calls == []
+        assert client.media.add_calls == 0
+        assert get_calls == 1
+    finally:
+        journal.close()
+
+
+def test_eof_partial_token_that_never_becomes_full_stays_held(tmp_path):
+    source, source_hash, journal, client = prepare_chunk_receipt(
+        tmp_path, state=STATE_BYTES_SUBMITTING
+    )
+    source_size = source.stat().st_size
+    client.uploadToken.uploaded_size = source_size
+    client.uploadToken.get = lambda _token_id: KalturaUploadToken(
+        id='token-existing',
+        status=1,
+        fileSize=source_size,
+        uploadedFileSize=source_size,
+    )
+    client.uploadToken.waitForFullUpload = lambda *_args, **_kwargs: (
+        (_ for _ in ()).throw(
+            KalturaOutcomeUnknown('last token status 1')
+        )
+    )
+    try:
+        with pytest.raises(
+            UploadNeedsManualReconciliation,
+            match='could not confirm final upload.*last token status 1',
+        ):
+            resume_upload_bytes_only(
+                str(source), 'u0000001', client, journal, source_hash
+            )
+        receipt = journal.get(source_hash, 'u0000001')
+        assert receipt.state == STATE_MANUAL_RECONCILE
+        assert receipt.confirmed_bytes == source_size
+        assert receipt.entry_id is None
+        assert client.uploadToken.chunk_calls == []
+        assert client.media.add_calls == 0
+    finally:
+        journal.close()
+
+
+def test_resume_holds_on_populated_token_file_size_mismatch(tmp_path):
+    source, source_hash, journal, client = prepare_chunk_receipt(
+        tmp_path, state=STATE_BYTES_SUBMITTING
+    )
+    original_get = client.uploadToken.get
+
+    def mismatched_size(upload_token_id):
+        token = original_get(upload_token_id)
+        token.fileSize = len(source.read_bytes()) + 1
+        return token
+
+    client.uploadToken.get = mismatched_size
+    try:
+        with pytest.raises(
+            UploadNeedsManualReconciliation,
+            match='unexpected fileSize',
+        ):
+            resume_upload_bytes_only(
+                str(source),
+                'u0000001',
+                client,
+                journal,
+                source_hash,
+            )
+        assert client.uploadToken.chunk_calls == []
+    finally:
+        journal.close()
+
+
+def test_ambiguous_chunk_response_uses_matching_token_progress(tmp_path, caplog):
+    source, source_hash, journal, client = prepare_chunk_receipt(tmp_path)
+    original_upload_chunk = client.uploadToken.uploadChunk
+    failed_once = False
+
+    def ambiguous_after_acceptance(*args):
+        nonlocal failed_once
+        token = original_upload_chunk(*args)
+        if not failed_once:
+            failed_once = True
+            raise KalturaOutcomeUnknown(
+                'upload file chunk did not return a response '
+                '(exception chain ConnectionError -> RemoteDisconnected, '
+                'elapsed 12.3s, request bytes 4, endpoint https://www.kaltura.com)'
+            )
+        return token
+
+    client.uploadToken.uploadChunk = ambiguous_after_acceptance
+    try:
+        with caplog.at_level('WARNING'):
+            receipt = _upload_bytes_in_chunks(
+                str(source),
+                'u0000001',
+                client,
+                journal,
+                source_hash,
+                chunk_size=4,
+            )
+        assert receipt.state == STATE_BYTES_UPLOADED
+        assert client.uploadToken.chunk_calls == [
+            (0, 4, False, False),
+            (4, 4, True, False),
+            (8, 2, True, True),
+        ]
+        assert 'ConnectionError -> RemoteDisconnected' in caplog.text
+        assert 'elapsed 12.3s' in caplog.text
+    finally:
+        journal.close()
+
+
+def test_ambiguous_chunk_without_progress_holds_same_token(tmp_path):
+    source, source_hash, journal, client = prepare_chunk_receipt(tmp_path)
+
+    def never_accepted(*_args):
+        raise KalturaOutcomeUnknown(
+            'upload file chunk did not return a response '
+            '(exception chain ConnectionError, elapsed 180.0s, request bytes 4)'
+        )
+
+    client.uploadToken.uploadChunk = never_accepted
+    try:
+        with pytest.raises(
+            UploadNeedsManualReconciliation,
+            match='ConnectionError.*elapsed 180.0s.*no progress after 3 attempts',
+        ):
+            _upload_bytes_in_chunks(
+                str(source),
+                'u0000001',
+                client,
+                journal,
+                source_hash,
+                chunk_size=4,
+            )
+        receipt = journal.get(source_hash, 'u0000001')
+        assert receipt.state == STATE_MANUAL_RECONCILE
+        assert receipt.confirmed_bytes == 0
+        assert receipt.upload_token_id == 'token-existing'
+        assert receipt.entry_id is None
+        assert receipt_allows_bytes_resume(receipt)
+    finally:
+        journal.close()
+
+
+def test_bytes_resume_rejects_changed_source_hash(tmp_path):
+    source, source_hash, journal, client = prepare_chunk_receipt(
+        tmp_path, state=STATE_BYTES_SUBMITTING
+    )
+    source.write_bytes(b'changed bytes')
+    try:
+        with pytest.raises(UploadNeedsManualReconciliation, match='SHA-256'):
+            resume_upload_bytes_only(
+                str(source),
+                'u0000001',
+                client,
+                journal,
+                source_hash,
+            )
+        assert client.uploadToken.chunk_calls == []
+    finally:
+        journal.close()
+
+
+def test_entry_stage_receipt_is_never_eligible_for_bytes_resume(tmp_path):
+    source, source_hash, journal, client = prepare_chunk_receipt(
+        tmp_path, state=STATE_ENTRY_CREATING
+    )
+    try:
+        assert receipt_allows_bytes_resume(
+            journal.get(source_hash, 'u0000001')
+        ) is False
+        with pytest.raises(UploadNeedsManualReconciliation, match='not eligible'):
+            resume_upload_bytes_only(
+                str(source),
+                'u0000001',
+                client,
+                journal,
+                source_hash,
+            )
+    finally:
+        journal.close()
+
+
+def test_existing_journal_schema_migrates_without_losing_receipt(tmp_path):
+    path = tmp_path / 'legacy.sqlite3'
+    connection = sqlite3.connect(path)
+    connection.execute(
+        '''
+        CREATE TABLE upload_receipts (
+            source_sha256 TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            state TEXT NOT NULL,
+            upload_token_id TEXT,
+            entry_id TEXT,
+            detail TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (source_sha256, owner_id)
+        )
+        '''
+    )
+    connection.execute(
+        'INSERT INTO upload_receipts VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ('hash', 'owner', 'source.mp4', STATE_BYTES_SUBMITTING, 'token', None, None, 'now'),
+    )
+    connection.commit()
+    connection.close()
+
+    with UploadJournal(str(path)) as journal:
+        receipt = journal.get('hash', 'owner')
+        assert receipt.source_name == 'source.mp4'
+        assert receipt.source_size is None
+        assert receipt.confirmed_bytes == 0
+
+
 def make_http_client():
     client = KalturaClient(KalturaConfiguration())
     client.sessionData = KalturaClient.SessionData({
@@ -322,8 +769,61 @@ def test_non_json_2xx_upload_with_pending_token_stays_unknown(monkeypatch):
 
     monkeypatch.setattr('mock_kaltura_client.requests.post', fake_post)
 
-    with pytest.raises(KalturaOutcomeUnknown, match='last token status 1'):
+    with pytest.raises(KalturaOutcomeUnknown, match='non-JSON.*last token status 1'):
         client.uploadToken.upload('token-1', io.BytesIO(b'test'), False, True, 0)
+
+
+def test_upload_transport_error_reports_elapsed_and_safe_exception_chain(monkeypatch):
+    client = make_http_client()
+    times = iter((100.0, 112.5))
+
+    monkeypatch.setattr('mock_kaltura_client.time.monotonic', lambda: next(times))
+    monkeypatch.setattr(
+        'mock_kaltura_client.requests.post',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            requests.ConnectionError('secret-bearing request failed')
+        ),
+    )
+
+    with pytest.raises(KalturaOutcomeUnknown) as caught:
+        client.post_upload(
+            'https://www.kaltura.com/upload?ks=do-not-log',
+            io.BytesIO(b'test'),
+            request_bytes=4,
+        )
+
+    message = str(caught.value)
+    assert 'ConnectionError' in message
+    assert 'elapsed 12.5s' in message
+    assert 'request bytes 4' in message
+    assert 'https://www.kaltura.com/upload' in message
+    assert 'do-not-log' not in message
+
+
+def test_upload_chunk_rejects_different_returned_token(monkeypatch):
+    client = make_http_client()
+    monkeypatch.setattr(
+        'mock_kaltura_client.requests.post',
+        lambda url, **_kwargs: FakeResponse(
+            url,
+            payload={
+                'id': 'different-token',
+                'status': 1,
+                'uploadedFileSize': 4,
+            },
+        ),
+    )
+
+    with pytest.raises(KalturaOutcomeUnknown, match='different token id'):
+        client.uploadToken.uploadChunk(
+            'token-1', io.BytesIO(b'test'), False, False, 0
+        )
+
+
+@pytest.mark.parametrize('invalid_size', ['NaN', 'Infinity', '-Infinity', -1, 1.5])
+def test_uploaded_size_parser_rejects_invalid_numbers(invalid_size):
+    token = KalturaUploadToken(uploadedFileSize=invalid_size)
+    assert KalturaClient.UploadTokenService._uploaded_size(token) is None
 
 
 def test_media_add_http_500_is_unknown(monkeypatch):

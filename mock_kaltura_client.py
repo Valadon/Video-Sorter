@@ -5,6 +5,7 @@ what we need it to do. Ideally, if the client library is fixed it won't
 take much to migrate scripts to use it.
 '''
 
+import math
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -22,10 +23,27 @@ class KalturaConfiguration:
     pass
 
 class KalturaUploadToken:
-    def __init__(self, id=None, uploadUrl=None, status=None):
+    def __init__(
+        self,
+        id=None,
+        uploadUrl=None,
+        status=None,
+        fileName=None,
+        fileSize=None,
+        uploadedFileSize=None,
+        createdAt=None,
+        updatedAt=None,
+        autoFinalize=None,
+    ):
         self.id = id
         self.uploadUrl = uploadUrl
         self.status = status
+        self.fileName = fileName
+        self.fileSize = fileSize
+        self.uploadedFileSize = uploadedFileSize
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.autoFinalize = autoFinalize
 
     @staticmethod
     def fromJsonResponse(res):
@@ -33,7 +51,21 @@ class KalturaUploadToken:
             id=res['id'],
             uploadUrl=res.get('uploadUrl', None),
             status=res.get('status', None),
+            fileName=res.get('fileName'),
+            fileSize=res.get('fileSize'),
+            uploadedFileSize=res.get('uploadedFileSize'),
+            createdAt=res.get('createdAt'),
+            updatedAt=res.get('updatedAt'),
+            autoFinalize=res.get('autoFinalize'),
         )
+
+    def toDict(self):
+        result = {}
+        for key in ('fileName', 'fileSize', 'autoFinalize'):
+            value = getattr(self, key)
+            if value is not None:
+                result[key] = value
+        return result
 
 class KalturaServiceBase:
     def __init__(self, client):
@@ -202,7 +234,37 @@ class KalturaClient:
             ) from exc
         return self._parse_response(response, operation)
 
-    def post_upload(self, url: str, fileData, operation='upload file bytes'):
+    @staticmethod
+    def _exception_types(error: BaseException) -> str:
+        """Describe a requests failure without leaking a credential-bearing URL."""
+        names = []
+        pending = [error]
+        seen = set()
+        while pending and len(names) < 6:
+            current = pending.pop(0)
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            name = type(current).__name__
+            if name not in names:
+                names.append(name)
+            for related in (current.__cause__, current.__context__):
+                if isinstance(related, BaseException):
+                    pending.append(related)
+            for argument in getattr(current, 'args', ()):
+                if isinstance(argument, BaseException):
+                    pending.append(argument)
+        return ' -> '.join(names)
+
+    def post_upload(
+        self,
+        url: str,
+        fileData,
+        operation='upload file bytes',
+        *,
+        request_bytes=None,
+    ):
+        started_at = time.monotonic()
         try:
             response = requests.post(
                 url,
@@ -210,9 +272,17 @@ class KalturaClient:
                 timeout=self.UPLOAD_TIMEOUT,
             )
         except requests.RequestException as exc:
+            elapsed = time.monotonic() - started_at
+            size_detail = (
+                f', request bytes {request_bytes}'
+                if request_bytes is not None
+                else ''
+            )
             raise KalturaOutcomeUnknown(
                 f'{operation} did not return a response '
-                f'({type(exc).__name__}, endpoint {self._safe_endpoint(url)})'
+                f'(exception chain {self._exception_types(exc)}, '
+                f'elapsed {elapsed:.1f}s{size_detail}, '
+                f'endpoint {self._safe_endpoint(url)})'
             ) from exc
 
         try:
@@ -262,9 +332,13 @@ class KalturaClient:
         
     class UploadTokenService(KalturaServiceBase):
         def add (self, uploadToken):
+            request_data = self.client.getRequestData()
+            token_data = uploadToken.toDict() if uploadToken is not None else {}
+            if token_data:
+                request_data['uploadToken'] = token_data
             res = self.client.post_json(
                 'uploadtoken/action/add',
-                self.client.getRequestData(),
+                request_data,
                 operation='create upload token',
             )
             token = KalturaUploadToken.fromJsonResponse(res)
@@ -278,15 +352,29 @@ class KalturaClient:
                 self.client.getRequestData({'uploadTokenId': uploadTokenId}),
                 operation='verify accepted upload',
             )
-            return KalturaUploadToken.fromJsonResponse(res)
+            token = KalturaUploadToken.fromJsonResponse(res)
+            if token.id != uploadTokenId:
+                raise KalturaOutcomeUnknown(
+                    'verify accepted upload returned a different upload token id'
+                )
+            return token
 
-        def waitForFullUpload(self, uploadTokenId):
+        def waitForFullUpload(self, uploadTokenId, expected_size=None):
             last_status = None
             for attempt in range(self.client.UPLOAD_STATUS_POLL_ATTEMPTS):
                 token = self.get(uploadTokenId)
                 last_status = token.status
                 if token.status == 2:
-                    return token
+                    if expected_size is None:
+                        return token
+                    uploaded_size = self._uploaded_size(token)
+                    if uploaded_size == expected_size:
+                        return token
+                    raise KalturaOutcomeUnknown(
+                        'upload token reached full-upload status with an unexpected '
+                        f'byte count (expected {expected_size}, Kaltura reported '
+                        f'{token.uploadedFileSize!r})'
+                    )
                 if token.status in (4, 5):
                     raise KalturaApiError(
                         'upload file bytes failed according to the upload token '
@@ -299,6 +387,68 @@ class KalturaClient:
                 'upload file bytes could not be confirmed from the upload token '
                 f'(last token status {last_status})'
             )
+
+        @staticmethod
+        def _nonnegative_integer(value):
+            if value is None:
+                return None
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if not math.isfinite(numeric):
+                return None
+            integer = int(numeric)
+            return integer if numeric == integer and integer >= 0 else None
+
+        @classmethod
+        def _uploaded_size(cls, token):
+            return cls._nonnegative_integer(token.uploadedFileSize)
+
+        def uploadChunk(
+            self,
+            uploadTokenId,
+            chunkData,
+            resume,
+            finalChunk,
+            resumeAt,
+        ):
+            upload_url = self.client._upload_action_url(
+                self.client.upload_urls.get(uploadTokenId, '')
+            )
+            url = self.client._with_query_params(upload_url, {
+                'format': 1,
+                'uploadTokenId': uploadTokenId,
+                'resume': 'true' if resume else 'false',
+                'finalChunk': 'true' if finalChunk else 'false',
+                'resumeAt': resumeAt,
+                'ks': self.client.sessionData.ks,
+                'partnerId': self.client.sessionData.partnerId,
+            })
+            try:
+                request_bytes = len(chunkData.getbuffer())
+            except (AttributeError, TypeError):
+                request_bytes = None
+            res = self.client.post_upload(
+                url,
+                chunkData,
+                operation=(
+                    f'upload file chunk at offset {resumeAt}'
+                    if not finalChunk
+                    else f'finalize upload at offset {resumeAt}'
+                ),
+                request_bytes=request_bytes,
+            )
+            if not isinstance(res, dict) or not res.get('id'):
+                raise KalturaOutcomeUnknown(
+                    f'upload chunk at offset {resumeAt} returned no token receipt'
+                )
+            token = KalturaUploadToken.fromJsonResponse(res)
+            if token.id != uploadTokenId:
+                raise KalturaOutcomeUnknown(
+                    f'upload chunk at offset {resumeAt} returned a different token id'
+                )
+            return token
         
         def upload (self, uploadTokenId, fileData, resume, finalChunk, resumeAt):
             upload_url = self.client._upload_action_url(
@@ -317,8 +467,13 @@ class KalturaClient:
 
             try:
                 res = self.client.post_upload(url, fileData, operation='upload file bytes')
-            except KalturaOutcomeUnknown:
-                return self.waitForFullUpload(uploadTokenId)
+            except KalturaOutcomeUnknown as upload_error:
+                try:
+                    return self.waitForFullUpload(uploadTokenId)
+                except KalturaApiError as status_error:
+                    raise KalturaOutcomeUnknown(
+                        f'{upload_error}; follow-up token check: {status_error}'
+                    ) from upload_error
 
             if not isinstance(res, dict) or not res.get('id'):
                 return self.waitForFullUpload(uploadTokenId)
