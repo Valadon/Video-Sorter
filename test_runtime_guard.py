@@ -57,8 +57,9 @@ def test_load_runtime_config_handles_inline_comments_and_utf8_bom(tmp_path):
 def test_missing_runtime_config_names_the_selected_path(tmp_path):
     config_path = tmp_path / "missing.ini"
 
-    with pytest.raises(RuntimeConfigurationError, match=str(config_path)):
+    with pytest.raises(RuntimeConfigurationError) as error:
         load_runtime_config(config_path)
+    assert str(config_path) in str(error.value)
 
 
 def test_config_environment_only_loads_dotenv_beside_selected_config(tmp_path, monkeypatch):
