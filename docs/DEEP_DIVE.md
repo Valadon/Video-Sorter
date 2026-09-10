@@ -20,19 +20,21 @@ This is not a generic media pipeline. It is a narrow operational script built ar
 
 The main runtime lives in `video_sorter.py`.
 
-1. Read `config.ini` from the repo root at import/runtime.
-2. Build `RECORDING_START_TOLERANCE` from `[Settings].start_time_tolerance`.
-3. Read the course spreadsheet into `Course` objects.
-4. Enter an infinite loop.
-5. Process immediately on first launch, then process again whenever `datetime.now().time().hour == 3`.
-6. For every `.mp4` in the watch folder:
+1. Resolve `config.ini` beside the source app or packaged executable, or use the file passed with `--config`.
+2. Acquire `.video_sorter.lock` beside that config. A second process using the same config directory exits before credentials, email, or processing are initialized.
+3. Load `.env` from the selected config directory and build `RECORDING_START_TOLERANCE` from `[Settings].start_time_tolerance`.
+4. Start the file log with the app version, build identity, and absolute config path.
+5. Read the course spreadsheet into `Course` objects.
+6. Enter an infinite loop.
+7. Process immediately on first launch, then process again whenever `datetime.now().time().hour == 3`.
+8. For every `.mp4` in the watch folder:
    - parse the filename into a `LectureRecording`
    - try to match that recording to a `Course`
    - move or upload+move depending on mode
-7. Reap old files from the destination folder based on `weeks_before_deletion`.
-8. Sleep until the next polling interval.
+9. Reap old files from the destination folder based on `weeks_before_deletion`.
+10. Flush one warning/error email digest, if the run produced any qualifying alerts, then sleep until the next polling interval.
 
-Important operational detail: there is no filesystem watcher. This is a polling/scheduled batch job.
+There is no filesystem watcher. This is a polling/scheduled batch job. The operating system releases the single-instance lock if the process exits or crashes; the lock file can remain on disk without blocking the next launch.
 
 For a controlled batch that exits after processing and retention cleanup, run `video_sorter.py --run-once`.
 
@@ -40,7 +42,7 @@ For a controlled batch that exits after processing and retention cleanup, run `v
 
 ### 1. `config.ini`
 
-The app expects a real `config.ini` at the repo root. The example file shows the required keys:
+The app expects a real `config.ini`. With no option, source runs look beside `video_sorter.py` and packaged runs look beside `video_sorter.exe`. `--config PATH` selects another file; relative paths are resolved from the caller's current directory. The example file shows the required keys:
 
 - `[Paths]`
   - `watch_folder`
@@ -63,6 +65,8 @@ The app expects a real `config.ini` at the repo root. The example file shows the
 
 The runtime config parser now supports inline comments, but the example file keeps comments on their own lines so it stays easy to copy and audit.
 
+Email alerts are batched by processing pass. Records at or above `[LoggingEmails].level` accumulate while the startup schedule and batch are handled, then the app sends one plain-text digest containing the warning/error count and every qualifying log entry. A clean pass sends nothing. An unexpected processing exception is logged and included before the digest flushes. Schedule blockers flush a single startup-validation digest before exit. This does not buffer or reduce the normal file log.
+
 ### 2. `.env`
 
 Only needed for `Upload` mode. `kaltura_uploader.py` expects:
@@ -71,7 +75,7 @@ Only needed for `Upload` mode. `kaltura_uploader.py` expects:
 - `TOKEN`
 - `TOKEN_ID`
 
-These are loaded via `python-dotenv`.
+On normal startup, these are loaded via `python-dotenv` from `.env` beside the selected `config.ini`. Existing process environment values take precedence. Validation, `--version`, and `--upload-status` do not load the credentials.
 
 ### 3. Schedule spreadsheet
 
@@ -273,7 +277,28 @@ The repository includes a minimal custom client because the author notes that th
 
 Operational nuance: upload ownership is assigned per host. In `upload_files()`, the script loops through each course host and performs an upload before moving the file.
 
-The custom client deliberately uploads through `https://www.kaltura.com/api_v3/service/uploadtoken/action/upload`, matching the repository's proven legacy behavior. It does not use the alternate `uploadUrl` host returned with a token: that hostname did not resolve on the production PC. The client forces `format=1` on both API and file-upload calls. Kaltura's upload endpoint can acknowledge accepted bytes with HTTP 202 and an empty body; in that case the client polls `uploadToken.get` and continues only after the token reaches full-upload status. It URL-encodes query values and applies bounded connect/read timeouts. Uploads allow up to three minutes for connection and TLS negotiation because a verified 720.7 MB production upload took about 63 seconds before returning. Failures identify the upload stage, HTTP status, content type, sanitized endpoint, and response size without logging session tokens or query parameters.
+The custom client deliberately uploads through `https://www.kaltura.com/api_v3/service/uploadtoken/action/upload`, matching the repository's proven legacy behavior. It does not use the alternate `uploadUrl` host returned with a token: that hostname did not resolve on the production PC. The client forces `format=1` on both API and file-upload calls. When the upload response is empty, non-JSON, or lost after transmission, the client checks the known upload token and continues only after the token reaches full-upload status. It URL-encodes query values and applies bounded connect/read timeouts. Uploads allow up to three minutes for connection and TLS negotiation because a verified 720.7 MB production upload took about 63 seconds before returning. Failures identify the upload stage, HTTP status, content type, sanitized endpoint, and response size without logging session tokens or query parameters.
+
+Upload mode keeps `upload_journal.sqlite3` beside the selected `config.ini`. Each source-file SHA-256 and owner has a durable receipt for the upload token, confirmed bytes, media entry, and content attachment. A restart resumes only a confirmed stage and skips owners whose attachment is already complete. If Kaltura may have created an entry or attached content without returning a usable receipt, the journal marks that owner for manual reconciliation and later runs refuse to create a possible duplicate.
+
+The app creates a fresh Kaltura client for each owner upload, so a long backlog does not reuse a session past its lifetime. It hashes each source file once per processing pass and reuses that hash for every owner. The file moves only after every owner reaches a confirmed attachment. Successful and reused receipts log the filename, course, owner, and Kaltura entry ID.
+
+Inspect the journal without loading credentials or processing files:
+
+```bash
+video_sorter.py --config /path/to/config.ini --upload-status
+```
+
+The report includes the source filename, abbreviated hash, owner, state, whether a token is recorded, entry ID, update time, and reconciliation detail. It never prints the upload token itself.
+
+Two live, read-only Kaltura checks use credentials from the selected config directory:
+
+```bash
+video_sorter.py --config /path/to/config.ini --find-media "Exact Media Name" --owner u1234567
+video_sorter.py --config /path/to/config.ini --verify-uploads
+```
+
+The first command performs an exact name-and-owner search. The second reads every entry ID in the upload journal and fetches its current Kaltura record. Both print only the entry ID, name, owner, status, and duration. They do not upload, attach, move, or delete recordings, and they do not take the processing lock, so an operator can run them while the sorter is active.
 
 ## Retention / Reaper
 
@@ -292,10 +317,7 @@ The repo has a meaningful pytest suite in `unit_test.py`. It covers:
 - full `process_existing_files()` behavior
 - reaper behavior
 
-Local verification on August 25, 2026:
-
-- command run: `.venv/bin/python -m pytest -q`
-- result: `49 passed`
+Run the full suite with `.venv/bin/python -m pytest -q`.
 
 The suite includes the current header, room, instructor-role, multi-meeting, date-limit, and duplicate-slot cases.
 
@@ -327,15 +349,15 @@ The spec creates a one-directory bundle at `dist/video_sorter/`. Copy the whole 
 
 The CI-built executable is unsigned and intended for controlled internal deployment. Verify both the workflow commit and ZIP checksum before extraction. SmartScreen or endpoint security may flag it until an Authenticode signing process is configured.
 
-The build does not contain `config.ini`, `.env`, or a schedule workbook. The executable reads those files relative to its working directory. A Windows service or scheduled task therefore needs its working directory set to the deployment folder.
+The build does not contain `config.ini`, `.env`, `upload_journal.sqlite3`, or a schedule workbook. The bundled `Start-VideoSorter.ps1` launcher sets the working directory to the install folder and passes `--config` explicitly. It uses `config.ini` beside the executable by default and accepts `-ConfigPath` for another location.
+
+Run `video_sorter.exe --version` to print the app version, source commit, build time, and workflow run embedded by CI. This command does not load config, credentials, or the process lock.
 
 ## Current Sharp Edges
 
 These are not necessarily production bugs, but they are the main maintenance hotspots.
 
 - The build stack currently depends on the `setuptools==79.0.1` compatibility pin for `pkg_resources`.
-- `config-EXAMPLE.ini` is not safely copy-pasteable because of inline value comments.
-- The app reads config at import time, which makes code reuse and isolated testing more awkward.
 - Instructor names still need the `LAST, FIRST (00123456)` core format after optional bracketed role suffixes.
 - The default process is a forever loop with time-based polling. The CLI has validation and one-pass modes but no service wrapper.
 - The repo still reflects a Windows-first operational history even though development can happen on macOS/Linux.

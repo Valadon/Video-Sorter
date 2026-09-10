@@ -1,11 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+
+datas = []
+build_info = Path('build-info.json')
+if build_info.exists():
+    datas.append((str(build_info), '.'))
 
 a = Analysis(
     ['video_sorter.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=datas,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

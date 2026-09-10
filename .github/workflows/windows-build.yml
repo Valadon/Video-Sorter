@@ -10,6 +10,7 @@ on:
       - requirements.txt
       - test_courses.xlsx
       - video_sorter.spec
+      - deployment/**
       - .github/workflows/windows-build.yml
 
 permissions:
@@ -40,15 +41,28 @@ jobs:
           New-Item -ItemType Directory -Force -Path $testRoot | Out-Null
           Set-Content -Path config.ini -Value @("[Paths]", "test_folder = $testRoot")
 
+      - name: Embed non-secret build identity
+        shell: pwsh
+        run: |
+          python -c "import json, os; from pathlib import Path; from runtime_guard import build_metadata_payload; payload = build_metadata_payload(commit=os.environ['GITHUB_SHA'], workflow_run=os.environ['GITHUB_RUN_ID']); Path('build-info.json').write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')"
+
       - name: Run tests
         run: python -m pytest -q
 
       - name: Build the Windows bundle
-        run: python -m PyInstaller --clean --noconfirm video_sorter.spec
+        shell: pwsh
+        run: |
+          python -m PyInstaller --clean --noconfirm video_sorter.spec
+          Copy-Item deployment\Start-VideoSorter.ps1 dist\video_sorter\Start-VideoSorter.ps1
 
       - name: Smoke test the packaged executable
         shell: pwsh
         run: |
+          $expectedCommit = $env:GITHUB_SHA.Substring(0, 12)
+          $versionOutput = & ".\dist\video_sorter\video_sorter.exe" --version
+          if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch $expectedCommit) {
+            throw "Packaged build identity did not match commit $env:GITHUB_SHA. Output: $versionOutput"
+          }
           & ".\dist\video_sorter\video_sorter.exe" --validate-schedule ".\test_courses.xlsx"
           if ($LASTEXITCODE -ne 0) {
             throw "Packaged schedule validation failed with exit code $LASTEXITCODE"
@@ -60,6 +74,7 @@ jobs:
           Compress-Archive -Path dist\video_sorter\* -DestinationPath video_sorter-windows-x64.zip
           $hash = (Get-FileHash video_sorter-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  video_sorter-windows-x64.zip" | Set-Content video_sorter-windows-x64.sha256
+          Copy-Item build-info.json video_sorter-windows-x64.build-info.json
 
       - name: Upload the Windows release artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -68,5 +83,6 @@ jobs:
           path: |
             video_sorter-windows-x64.zip
             video_sorter-windows-x64.sha256
+            video_sorter-windows-x64.build-info.json
           if-no-files-found: error
           retention-days: 30

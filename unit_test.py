@@ -912,10 +912,10 @@ class TestKalturaClient:
             client.uploadToken.upload('upload-token-1', io.BytesIO(b'test'), False, True, 0)
 
         message = str(exc_info.value)
-        assert 'upload file bytes failed' in message
+        assert 'verify accepted upload failed' in message
         assert 'HTTP 200' in message
         assert 'content-type text/html; charset=UTF-8' in message
-        assert 'endpoint https://www.kaltura.com/api_v3/service/uploadtoken/action/upload' in message
+        assert 'endpoint https://www.kaltura.com/api_v3/service/uploadtoken/action/get' in message
         assert 'secret-session-value' not in message
 
     def test_empty_accepted_upload_is_verified_by_token_status(self, monkeypatch):
@@ -1022,7 +1022,7 @@ class TestKalturaClient:
             client.uploadToken.upload('upload-token-1', io.BytesIO(b'test'), False, True, 0)
 
         message = str(exc_info.value)
-        assert 'upload file bytes failed before Kaltura returned a response' in message
+        assert 'verify accepted upload did not return a response' in message
         assert 'Timeout' in message
-        assert 'endpoint https://www.kaltura.com/api_v3/service/uploadtoken/action/upload' in message
+        assert 'endpoint https://www.kaltura.com/api_v3/service/uploadtoken/action/get' in message
         assert 'secret-session-value' not in message

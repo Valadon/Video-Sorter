@@ -13,6 +13,11 @@ import requests
 class KalturaApiError(RuntimeError):
     pass
 
+class KalturaOutcomeUnknown(KalturaApiError):
+    """The request may have reached Kaltura, but no usable receipt was returned."""
+
+    pass
+
 class KalturaConfiguration:
     pass
 
@@ -41,14 +46,21 @@ class KalturaMediaEntry:
         self.mediaType = None
         self.id = None
         self.userId = None
+        self.status = None
+        self.createdAt = None
+        self.duration = None
 
     @staticmethod
     def fromJsonResponse(res):
         mediaEntry = KalturaMediaEntry()
-        mediaEntry.name = res['name']
-        mediaEntry.description = res['description']
-        mediaEntry.mediaType = res['mediaType']
+        mediaEntry.name = res.get('name')
+        mediaEntry.description = res.get('description')
+        mediaEntry.mediaType = res.get('mediaType')
         mediaEntry.id = res['id']
+        mediaEntry.userId = res.get('userId')
+        mediaEntry.status = res.get('status')
+        mediaEntry.createdAt = res.get('createdAt')
+        mediaEntry.duration = res.get('duration')
         return mediaEntry
 
     def toDict (self):
@@ -153,14 +165,20 @@ class KalturaClient:
         try:
             response.raise_for_status()
         except requests.RequestException as exc:
-            raise KalturaApiError(
+            status = getattr(response, 'status_code', None)
+            error_type = (
+                KalturaOutcomeUnknown
+                if isinstance(status, int) and (status >= 500 or status in (408, 425))
+                else KalturaApiError
+            )
+            raise error_type(
                 f'{operation} failed ({KalturaClient._response_details(response)})'
             ) from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise KalturaApiError(
+            raise KalturaOutcomeUnknown(
                 f'{operation} failed: Kaltura returned a non-JSON response '
                 f'({KalturaClient._response_details(response)})'
             ) from exc
@@ -178,8 +196,8 @@ class KalturaClient:
         try:
             response = requests.post(url, json=data, timeout=self.JSON_TIMEOUT)
         except requests.RequestException as exc:
-            raise KalturaApiError(
-                f'{operation} failed before Kaltura returned a response '
+            raise KalturaOutcomeUnknown(
+                f'{operation} did not return a response '
                 f'({type(exc).__name__}, endpoint {self._safe_endpoint(url)})'
             ) from exc
         return self._parse_response(response, operation)
@@ -192,22 +210,25 @@ class KalturaClient:
                 timeout=self.UPLOAD_TIMEOUT,
             )
         except requests.RequestException as exc:
-            raise KalturaApiError(
-                f'{operation} failed before Kaltura returned a response '
+            raise KalturaOutcomeUnknown(
+                f'{operation} did not return a response '
                 f'({type(exc).__name__}, endpoint {self._safe_endpoint(url)})'
             ) from exc
 
         try:
             response.raise_for_status()
         except requests.RequestException as exc:
-            raise KalturaApiError(
+            status = getattr(response, 'status_code', None)
+            error_type = (
+                KalturaOutcomeUnknown
+                if isinstance(status, int) and (status >= 500 or status in (408, 425))
+                else KalturaApiError
+            )
+            raise error_type(
                 f'{operation} failed ({self._response_details(response)})'
             ) from exc
 
-        if (
-            getattr(response, 'status_code', None) in (202, 204)
-            and not getattr(response, 'content', b'')
-        ):
+        if not getattr(response, 'content', b''):
             return None
 
         return self._parse_response(response, operation)
@@ -267,13 +288,16 @@ class KalturaClient:
                 if token.status == 2:
                     return token
                 if token.status in (4, 5):
-                    break
+                    raise KalturaApiError(
+                        'upload file bytes failed according to the upload token '
+                        f'(token status {token.status})'
+                    )
                 if attempt < self.client.UPLOAD_STATUS_POLL_ATTEMPTS - 1:
                     time.sleep(self.client.UPLOAD_STATUS_POLL_INTERVAL)
 
-            raise KalturaApiError(
-                'upload file bytes was accepted, but the upload token did not '
-                f'reach full-upload status (last token status {last_status})'
+            raise KalturaOutcomeUnknown(
+                'upload file bytes could not be confirmed from the upload token '
+                f'(last token status {last_status})'
             )
         
         def upload (self, uploadTokenId, fileData, resume, finalChunk, resumeAt):
@@ -291,16 +315,28 @@ class KalturaClient:
                 'partnerId': self.client.sessionData.partnerId,
             })
 
-            res = self.client.post_upload(url, fileData, operation='upload file bytes')
-            if res is None:
+            try:
+                res = self.client.post_upload(url, fileData, operation='upload file bytes')
+            except KalturaOutcomeUnknown:
                 return self.waitForFullUpload(uploadTokenId)
-            return KalturaUploadToken.fromJsonResponse(res)
+
+            if not isinstance(res, dict) or not res.get('id'):
+                return self.waitForFullUpload(uploadTokenId)
+
+            token = KalturaUploadToken.fromJsonResponse(res)
+            if token.status == 2:
+                return token
+            return self.waitForFullUpload(uploadTokenId)
         
     class MediaService(KalturaServiceBase):
         def add (self, mediaEntry: KalturaMediaEntry):
             res = self.client.post_json('media/action/add', self.client.getRequestData({
                 'entry': mediaEntry.toDict()
             }), operation='create media entry')
+            if not isinstance(res, dict) or not res.get('id'):
+                raise KalturaOutcomeUnknown(
+                    'create media entry returned no entry id; outcome requires reconciliation'
+                )
             return KalturaMediaEntry.fromJsonResponse(res)
         
         def addContent(self, entry_id, resource):
@@ -308,7 +344,42 @@ class KalturaClient:
                 'entryId': entry_id,
                 'resource': resource.toDict()
             }), operation='attach uploaded content')
+            if not isinstance(res, dict) or res.get('id') != entry_id:
+                raise KalturaOutcomeUnknown(
+                    'attach uploaded content returned no matching entry id; '
+                    'outcome requires reconciliation'
+                )
             return res
+
+        def get(self, entry_id):
+            res = self.client.post_json(
+                'media/action/get',
+                self.client.getRequestData({'entryId': entry_id}),
+                operation='get media entry',
+            )
+            if not isinstance(res, dict) or not res.get('id'):
+                raise KalturaApiError('get media entry returned no entry id')
+            return KalturaMediaEntry.fromJsonResponse(res)
+
+        def listByNameAndOwner(self, name, owner_id):
+            res = self.client.post_json(
+                'media/action/list',
+                self.client.getRequestData({
+                    'filter': {
+                        'objectType': 'KalturaMediaEntryFilter',
+                        'nameEqual': name,
+                        'userIdEqual': owner_id,
+                    },
+                }),
+                operation='list media entries by exact name and owner',
+            )
+            if not isinstance(res, dict) or not isinstance(res.get('objects'), list):
+                raise KalturaApiError('list media entries returned an unusable result')
+            return [
+                KalturaMediaEntry.fromJsonResponse(item)
+                for item in res['objects']
+                if isinstance(item, dict) and item.get('id')
+            ]
         
     class UserService(KalturaServiceBase):
         def getByLoginId(self, loginId) -> KalturaUser:

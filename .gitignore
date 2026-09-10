@@ -2,9 +2,12 @@ virtual
 .venv
 build
 dist
+build-info.json
+.video_sorter.lock
 .env
 config.ini
 log.txt
+upload_journal.sqlite3*
 .pytest_cache
 __pycache__
 .DS_Store

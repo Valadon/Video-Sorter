@@ -2,18 +2,35 @@
 import os
 import re
 import argparse
+import sys
+from pathlib import Path
 from time import sleep
 import logging
-import logging.handlers
 import shutil
 import pandas as pd
 from datetime import datetime, timedelta, date, time
-import configparser
 from kaltura_uploader import *
 from data_types import *
 from format_parser import *
 from collections.abc import Callable
+from alert_digest import AlertDigestHandler, run_with_alert_digest
 from file_reaper import reap_files
+from upload_journal import (
+    STATE_ATTACHED,
+    STATE_MANUAL_RECONCILE,
+    UploadJournal,
+    sha256_file,
+)
+from runtime_guard import (
+    AlreadyRunningError,
+    RuntimeConfigurationError,
+    SingleInstanceLock,
+    load_config_environment,
+    load_runtime_config,
+    lock_path_for_config,
+    resolve_config_path,
+    version_string,
+)
 
 MEETING_START_TIME_PATTERN = re.compile(r'\b\d{1,2}:\d{2}(?:am|pm)\b|\b\d{1,2}(?:am|pm)\b', re.IGNORECASE)
 MEETING_DAY_PATTERN = re.compile(r'TTh|Th|Su|Sa|M|T|W|F')
@@ -60,13 +77,7 @@ NONPHYSICAL_ROOMS = {
     'tbd',
 }
 
-# Reading paths from config.ini
-config = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
-config.read('config.ini')
-
-RECORDING_START_TOLERANCE = timedelta(
-    minutes=config.getint('Settings', 'start_time_tolerance', fallback=30)
-)
+RECORDING_START_TOLERANCE = timedelta(minutes=30)
 
 
 class ScheduleFormatError(ValueError):
@@ -652,12 +663,19 @@ def move_video(rec: LectureRecording, dest_path):
     """
     Moves a recording to the given destination
     """
+    source_path = rec.filepath
     try:
-        shutil.move(rec.filepath, dest_path)
-        logging.info(f"Video moved from {rec.filepath} to {dest_path}")
+        shutil.move(source_path, dest_path)
+        if os.path.exists(source_path) or not os.path.exists(dest_path):
+            raise OSError(
+                f'Move verification failed: source exists={os.path.exists(source_path)}, '
+                f'destination exists={os.path.exists(dest_path)}'
+            )
+        logging.info(f"Video moved from {source_path} to {dest_path}")
         rec.filepath = dest_path
     except Exception as e:
         logging.error(f"An error occurred while moving {rec}: {e}")
+        raise
 
 def move_unmatched_video(rec: LectureRecording, dest_folder):
     """
@@ -725,16 +743,15 @@ def move_files (pairs: list[tuple[LectureRecording, Course or None]], dest_folde
             for ins in pair[1].hosts:
                 logging.debug(f'Video moved for {ins}')
 
-def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_folder: str):
+def upload_files (
+    pairs: list[tuple[LectureRecording, Course or None]],
+    dest_folder: str,
+    journal: UploadJournal | None = None,
+):
     """
     Given a list of tuples containing Recordings and their corresponding Courses, 
     uploads files to Kaltura, and then sorts them into folders based on their course
     """
-    try:
-        client = get_kaltura_client()
-    except Exception as e:
-        logging.error(f"Could not establish a kaltura session: {e}")
-        return
     for pair in pairs:
         if pair[1] is not None:
             if len(pair[1].hosts) == 0:
@@ -744,13 +761,62 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
             new_path = get_new_filepath(pair[0], pair[1], dest_folder)
             new_name = os.path.basename(new_path).replace('.mp4', '')
             upload_succeeded = True
+            source_sha256 = None
+            if journal is not None:
+                try:
+                    source_sha256 = sha256_file(pair[0].filepath)
+                except Exception as e:
+                    logging.error(
+                        f'Could not hash recording {pair[0].filename} for course '
+                        f'{_course_label(pair[1])}: {e}. Leaving the source file in place.'
+                    )
+                    continue
 
             for i, insr in enumerate(pair[1].hosts):
                 try:
-                    upload_video(pair[0], pair[1], client, new_name, i)
-                    logging.info(f'Successfully uploaded {pair[0]} for {insr}')
+                    needs_remote_client = True
+                    if journal is not None:
+                        receipt = journal.get(source_sha256, insr.unid)
+                        needs_remote_client = (
+                            receipt is None
+                            or receipt.state not in {STATE_ATTACHED, STATE_MANUAL_RECONCILE}
+                        )
+                    client = get_kaltura_client() if needs_remote_client else None
+                    result = upload_video(
+                        pair[0],
+                        pair[1],
+                        client,
+                        new_name,
+                        i,
+                        journal=journal,
+                        source_sha256=source_sha256,
+                    )
+                    if result.already_completed:
+                        logging.info(
+                            f'Confirmed prior upload for recording {pair[0].filename}, '
+                            f'course {_course_label(pair[1])}, owner {insr.unid}, '
+                            f'entry {result.entry_id}.'
+                        )
+                    else:
+                        logging.info(
+                            f'Successfully uploaded recording {pair[0].filename}, '
+                            f'course {_course_label(pair[1])}, owner {insr.unid}, '
+                            f'entry {result.entry_id}.'
+                        )
+                except UploadNeedsManualReconciliation as e:
+                    logging.error(
+                        f'Manual Kaltura reconciliation is required for recording '
+                        f'{pair[0].filename}, course {_course_label(pair[1])}, owner '
+                        f'{insr.unid}: {e}. Leaving the source file in place.'
+                    )
+                    upload_succeeded = False
+                    break
                 except Exception as e:
-                    logging.error(f'Error while uploading {pair[0]} for {insr}. {e}')
+                    logging.error(
+                        f'Error while uploading recording {pair[0].filename}, course '
+                        f'{_course_label(pair[1])}, owner {insr.unid}: {e}. '
+                        'Leaving the source file in place.'
+                    )
                     upload_succeeded = False
                     break
 
@@ -768,7 +834,15 @@ def upload_files (pairs: list[tuple[LectureRecording, Course or None]], dest_fol
             move_unmatched_video(pair[0], dest_folder)
 
 
-def process_existing_files(courses: list[Course], watch_path, dest_path, mode, weeks_before_deletion=26, from_date: date | None=None):
+def process_existing_files(
+    courses: list[Course],
+    watch_path,
+    dest_path,
+    mode,
+    weeks_before_deletion=26,
+    from_date: date | None=None,
+    upload_journal: UploadJournal | None = None,
+):
     """
     Given a list of courses and file path on which to watch for 
     videos, processes videos according to what mode has been set 
@@ -777,7 +851,7 @@ def process_existing_files(courses: list[Course], watch_path, dest_path, mode, w
     pairs = match_courses_to_recordings(courses, watch_path)
     if len(pairs) > 0:
         if mode == 'Upload':
-            upload_files(pairs, dest_path)
+            upload_files(pairs, dest_path, upload_journal)
         elif mode == 'Move':
             move_files(pairs, dest_path)
     else:
@@ -876,8 +950,38 @@ def validate_schedule_file(excel_path: str) -> int:
     return 0
 
 
-def _parse_command_line():
+def _parse_command_line(argv=None):
     parser = argparse.ArgumentParser(description='Sort classroom recordings using an Excel course schedule.')
+    parser.add_argument(
+        '--config',
+        metavar='PATH',
+        help='use a specific config.ini file instead of the one beside the app',
+    )
+    parser.add_argument(
+        '--version',
+        action='store_true',
+        help='show the application version and build identity, then exit',
+    )
+    parser.add_argument(
+        '--upload-status',
+        action='store_true',
+        help='show durable upload receipts without loading credentials or processing files',
+    )
+    parser.add_argument(
+        '--find-media',
+        metavar='NAME',
+        help='find Kaltura media with an exact name and owner (read-only)',
+    )
+    parser.add_argument(
+        '--owner',
+        metavar='ID',
+        help='Kaltura owner ID required by --find-media',
+    )
+    parser.add_argument(
+        '--verify-uploads',
+        action='store_true',
+        help='verify journaled Kaltura entry IDs against the live service (read-only)',
+    )
     parser.add_argument(
         '--validate-schedule',
         nargs='?',
@@ -890,38 +994,149 @@ def _parse_command_line():
         action='store_true',
         help='process one batch and exit instead of waiting for the daily run',
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-if __name__ == "__main__":
-    args = _parse_command_line()
-    if args.validate_schedule is not None:
-        if args.validate_schedule:
-            schedule_path = args.validate_schedule
-        elif config.has_option('Paths', 'excel_file'):
-            schedule_path = os.path.normpath(config.get('Paths', 'excel_file'))
-        else:
+def print_upload_status(config_path) -> int:
+    journal_path = Path(config_path).resolve().parent / 'upload_journal.sqlite3'
+    print(f'Upload journal: {journal_path}')
+    if not journal_path.exists():
+        print('Receipts: 0 (the upload journal does not exist yet)')
+        return 0
+
+    with UploadJournal(str(journal_path)) as journal:
+        receipts = journal.list_receipts()
+
+    print(f'Receipts: {len(receipts)}')
+    for receipt in receipts:
+        token_recorded = 'yes' if receipt.upload_token_id else 'no'
+        entry_id = receipt.entry_id or '-'
+        detail = f' detail={receipt.detail}' if receipt.detail else ''
+        print(
+            f'- {receipt.updated_at} file={receipt.source_name} '
+            f'sha256={receipt.source_sha256[:12]}... owner={receipt.owner_id} '
+            f'state={receipt.state} token_recorded={token_recorded} '
+            f'entry={entry_id}{detail}'
+        )
+    return 0
+
+
+def _one_line(value) -> str:
+    if value is None or value == '':
+        return '-'
+    return str(value).replace('\r', r'\r').replace('\n', r'\n')
+
+
+def _print_media_entry(entry) -> None:
+    print(
+        f'id={_one_line(getattr(entry, "id", None))} '
+        f'name={_one_line(getattr(entry, "name", None))} '
+        f'owner={_one_line(getattr(entry, "userId", None))} '
+        f'status={_one_line(getattr(entry, "status", None))} '
+        f'duration={_one_line(getattr(entry, "duration", None))}'
+    )
+
+
+def find_media(name: str, owner_id: str) -> int:
+    try:
+        client = get_kaltura_client()
+        entries = client.media.listByNameAndOwner(name, owner_id)
+    except Exception as error:
+        print(f'Kaltura media lookup failed: {error}', file=sys.stderr)
+        return 1
+
+    print(f'Matches: {len(entries)}')
+    for entry in entries:
+        _print_media_entry(entry)
+    return 0
+
+
+def verify_uploads(config_path) -> int:
+    journal_path = Path(config_path).resolve().parent / 'upload_journal.sqlite3'
+    if not journal_path.exists():
+        print(f'Upload journal does not exist: {journal_path}', file=sys.stderr)
+        return 1
+
+    with UploadJournal(str(journal_path)) as journal:
+        receipts = journal.list_receipts()
+    entry_ids = list(dict.fromkeys(
+        receipt.entry_id for receipt in receipts if receipt.entry_id
+    ))
+    print(f'Journaled entries: {len(entry_ids)}')
+    if not entry_ids:
+        return 0
+
+    try:
+        client = get_kaltura_client()
+    except Exception as error:
+        print(f'Kaltura verification login failed: {error}', file=sys.stderr)
+        return 1
+
+    failure_count = 0
+    for entry_id in entry_ids:
+        try:
+            _print_media_entry(client.media.get(entry_id))
+        except Exception as error:
+            failure_count += 1
             print(
-                'Schedule validation failed: supply a workbook path after --validate-schedule '
-                "or set Paths.excel_file in config.ini."
+                f'entry={_one_line(entry_id)} verification_failed={type(error).__name__}: '
+                f'{_one_line(error)}',
+                file=sys.stderr,
             )
-            raise SystemExit(2)
-        raise SystemExit(validate_schedule_file(schedule_path))
+    return 1 if failure_count else 0
 
-    WATCH_FOLDER = os.path.normpath(config.get('Paths', 'watch_folder'))
-    WATCH_FOLDER = os.path.abspath(WATCH_FOLDER)
-    DEST_FOLDER = os.path.normpath(config.get('Paths', 'destination_folder'))
-    EXCEL_FILE_PATH = os.path.normpath(config.get('Paths', 'excel_file'))
-    MODE = os.path.normpath(config.get('Settings', 'mode'))
-    LOG_FILE = config.get('Settings', 'log_file')
-    WEEKS_BEFORE_DELETION = config.getint('Settings', 'weeks_before_deletion')
 
-    print(f'See {LOG_FILE} for logs')
-    
+def _process_operational_pass(
+    courses,
+    watch_folder,
+    dest_folder,
+    mode,
+    weeks_before_deletion,
+    config_path,
+):
+    if mode.casefold() == 'upload':
+        journal_path = Path(config_path).resolve().parent / 'upload_journal.sqlite3'
+        with UploadJournal(str(journal_path)) as journal:
+            return process_existing_files(
+                courses,
+                watch_folder,
+                dest_folder,
+                mode,
+                weeks_before_deletion,
+                upload_journal=journal,
+            )
+    return process_existing_files(
+        courses,
+        watch_folder,
+        dest_folder,
+        mode,
+        weeks_before_deletion,
+    )
+
+
+def _run_operational(args, config, config_path):
+    global RECORDING_START_TOLERANCE
+    RECORDING_START_TOLERANCE = timedelta(
+        minutes=config.getint('Settings', 'start_time_tolerance', fallback=30)
+    )
+
+    watch_folder = os.path.abspath(os.path.normpath(config.get('Paths', 'watch_folder')))
+    dest_folder = os.path.normpath(config.get('Paths', 'destination_folder'))
+    excel_file_path = os.path.normpath(config.get('Paths', 'excel_file'))
+    mode = os.path.normpath(config.get('Settings', 'mode'))
+    log_file = config.get('Settings', 'log_file')
+    weeks_before_deletion = config.getint('Settings', 'weeks_before_deletion')
+
+    print(f'See {log_file} for logs')
+
     # Initialize logging
     log_level = logging.getLevelNamesMapping()[config.get('Settings', 'log_level')]
-    logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename=LOG_FILE, level=log_level)
-    logging.info('\n\nStarting the video sorter\n')
+    logging.basicConfig(format='[%(levelname)s] %(asctime)s %(message)s', datefmt='[%m/%d/%Y %I:%M:%S %p]', filename=log_file, level=log_level)
+    logging.info(
+        'Starting %s; config: %s',
+        version_string(),
+        Path(config_path).resolve(),
+    )
 
     # Get the emails for logging
     emails = []
@@ -932,34 +1147,131 @@ if __name__ == "__main__":
     HOST = config.get('LoggingEmails', 'outbound_server')
     FROM = config.get('LoggingEmails', 'from_address')
     smtp_level = logging.getLevelNamesMapping()[config.get('LoggingEmails', 'level')]
-    smtp_handler = logging.handlers.SMTPHandler(HOST, FROM, emails, config.get('LoggingEmails', 'subject'))
+    smtp_handler = AlertDigestHandler(HOST, FROM, emails, config.get('LoggingEmails', 'subject'))
     smtp_handler.setLevel(smtp_level)
-    logging.getLogger().addHandler(smtp_handler)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(smtp_handler)
 
-    courses = read_courses(EXCEL_FILE_PATH)
-    schedule_blockers = schedule_blocking_messages(
-        courses,
-        require_upload_hosts=MODE.casefold() == 'upload',
-    )
-    if schedule_blockers:
-        for blocker in schedule_blockers:
-            logging.critical(f'Schedule startup blocker: {blocker}')
-        print(f'Schedule has {len(schedule_blockers)} blocking row problem(s). See {LOG_FILE} for details.')
-        raise SystemExit(1)
+    try:
+        try:
+            courses = read_courses(excel_file_path)
+        except Exception:
+            logging.exception('Unhandled exception while loading the startup schedule.')
+            smtp_handler.send_digest('startup schedule loading')
+            raise
 
-    if args.run_once:
-        logging.info('Running one processing pass because --run-once was supplied.')
-        process_existing_files(courses, WATCH_FOLDER, DEST_FOLDER, MODE, WEEKS_BEFORE_DELETION)
-        raise SystemExit(0)
+        schedule_blockers = schedule_blocking_messages(
+            courses,
+            require_upload_hosts=mode.casefold() == 'upload',
+        )
+        if schedule_blockers:
+            for blocker in schedule_blockers:
+                logging.critical(f'Schedule startup blocker: {blocker}')
+            smtp_handler.send_digest('startup schedule validation')
+            print(f'Schedule has {len(schedule_blockers)} blocking row problem(s). See {log_file} for details.')
+            return 1
 
-    has_processed_videos = False
-    
-    while True:
-        current_time = datetime.now().time()
-        if current_time.hour == 3 or not has_processed_videos:
-            logging.info("It's around 3 AM, time to sort the videos.")
-            process_existing_files(courses, WATCH_FOLDER, DEST_FOLDER, MODE, WEEKS_BEFORE_DELETION)
-            has_processed_videos = True
-            sleep(3600)  # Sleep for 1 hour
+        if args.run_once:
+            logging.info('Running one processing pass because --run-once was supplied.')
+            run_with_alert_digest(
+                lambda: _process_operational_pass(
+                    courses,
+                    watch_folder,
+                    dest_folder,
+                    mode,
+                    weeks_before_deletion,
+                    config_path,
+                ),
+                smtp_handler,
+                'startup and one-pass processing',
+            )
+            return 0
+
+        has_processed_videos = False
+
+        while True:
+            current_time = datetime.now().time()
+            if current_time.hour == 3 or not has_processed_videos:
+                logging.info("It's around 3 AM, time to sort the videos.")
+                run_name = (
+                    'startup and initial processing'
+                    if not has_processed_videos
+                    else 'scheduled processing'
+                )
+                run_with_alert_digest(
+                    lambda: _process_operational_pass(
+                        courses,
+                        watch_folder,
+                        dest_folder,
+                        mode,
+                        weeks_before_deletion,
+                        config_path,
+                    ),
+                    smtp_handler,
+                    run_name,
+                )
+                has_processed_videos = True
+                sleep(3600)  # Sleep for 1 hour
+            else:
+                sleep(60)  # Sleep for 1 minute
+    finally:
+        root_logger.removeHandler(smtp_handler)
+        smtp_handler.close()
+
+
+def main(argv=None):
+    args = _parse_command_line(argv)
+    if args.version:
+        print(version_string())
+        return 0
+
+    if args.validate_schedule:
+        return validate_schedule_file(args.validate_schedule)
+
+    try:
+        config_path = resolve_config_path(args.config)
+        runtime_config = load_runtime_config(config_path)
+    except RuntimeConfigurationError as error:
+        print(f'Video Sorter configuration failed: {error}', file=sys.stderr)
+        return 2
+
+    if args.upload_status:
+        return print_upload_status(config_path)
+
+    if args.find_media is not None:
+        if not args.owner:
+            print('--find-media requires --owner ID.', file=sys.stderr)
+            return 2
+        load_config_environment(config_path)
+        return find_media(args.find_media, args.owner)
+
+    if args.owner:
+        print('--owner is only valid with --find-media.', file=sys.stderr)
+        return 2
+
+    if args.verify_uploads:
+        load_config_environment(config_path)
+        return verify_uploads(config_path)
+
+    if args.validate_schedule is not None:
+        if runtime_config.has_option('Paths', 'excel_file'):
+            schedule_path = os.path.normpath(runtime_config.get('Paths', 'excel_file'))
         else:
-            sleep(60)  # Sleep for 1 minute
+            print(
+                'Schedule validation failed: supply a workbook path after --validate-schedule '
+                "or set Paths.excel_file in config.ini."
+            )
+            return 2
+        return validate_schedule_file(schedule_path)
+
+    try:
+        with SingleInstanceLock(lock_path_for_config(config_path)):
+            load_config_environment(config_path)
+            return _run_operational(args, runtime_config, config_path)
+    except AlreadyRunningError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

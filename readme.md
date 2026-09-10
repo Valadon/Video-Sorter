@@ -11,11 +11,11 @@ If you are taking the project over, start here:
 
 The sorter depends on three local inputs:
 
-1. `config.ini` in the repo root
+1. `config.ini` beside the source app or packaged executable, unless `--config` selects another file
 2. a schedule spreadsheet matching the expected column names
 3. recording filenames that match one of the supported parser formats
 
-For `Upload` mode it also needs a repo-root `.env` file with Kaltura credentials.
+For `Upload` mode it also needs a `.env` file beside the selected `config.ini`.
 
 A sanitized schedule workbook example is available at [docs/examples/course_schedule_example.xlsx](docs/examples/course_schedule_example.xlsx), with field notes in [docs/COURSE_SHEET_INPUT.md](docs/COURSE_SHEET_INPUT.md).
 
@@ -40,7 +40,7 @@ python3.11 -m venv .venv
 
 ### 3. Create `config.ini`
 
-Use `config-EXAMPLE.ini` as a reference. The app now supports inline config comments, but the example keeps explanatory comments on their own lines to stay easy to copy and audit.
+Use `config-EXAMPLE.ini` as a reference. Put the finished file beside the app, or pass its path with `--config`. The app supports inline config comments, but the example keeps explanatory comments on their own lines so it stays easy to copy and audit.
 
 ### 4. Add `.env` if using upload mode
 
@@ -50,7 +50,7 @@ Use `config-EXAMPLE.ini` as a reference. The app now supports inline config comm
 - `TOKEN`
 - `TOKEN_ID`
 
-These values should stay local and never be committed.
+Put `.env` in the same directory as the selected `config.ini`. Existing environment variables take precedence over values in that file. These values should stay local and never be committed.
 
 ### 5. Run the app
 
@@ -58,7 +58,13 @@ These values should stay local and never be committed.
 .venv/bin/python video_sorter.py
 ```
 
-The app processes immediately on first launch, then continues running and checks again when the local time reaches 3 AM.
+The app uses `config.ini` beside `video_sorter.py` by default. To choose another file, run:
+
+```bash
+.venv/bin/python video_sorter.py --config /path/to/config.ini
+```
+
+The app processes immediately on first launch, then continues running and checks again when the local time reaches 3 AM. It holds `.video_sorter.lock` beside the selected config while running. A second copy using the same config directory exits before loading credentials or configuring email. The operating system releases the lock if the process stops or crashes; the small lock file may remain and is safe to leave in place.
 
 For a controlled one-pass test, run:
 
@@ -66,7 +72,20 @@ For a controlled one-pass test, run:
 .venv/bin/python video_sorter.py --run-once
 ```
 
-This uses the mode and folders in `config.ini`, processes one batch, runs retention cleanup, and exits.
+This uses the selected config, processes one batch, runs retention cleanup, and exits. `--config` can be combined with `--run-once`.
+
+Warnings and errors at or above `[LoggingEmails].level` are collected during schedule loading and processing, then sent as one digest at the end of the processing pass. A clean pass sends no email. If a pass raises an unexpected exception, the exception is added and the digest is flushed before the process exits. The regular file log remains immediate and complete.
+
+These read-only checks are available:
+
+```bash
+.venv/bin/python video_sorter.py --version
+.venv/bin/python video_sorter.py --config /path/to/config.ini --upload-status
+.venv/bin/python video_sorter.py --config /path/to/config.ini --find-media "Exact Media Name" --owner u1234567
+.venv/bin/python video_sorter.py --config /path/to/config.ini --verify-uploads
+```
+
+`--version` prints the app version and embedded build identity without reading config or credentials. `--upload-status` lists the durable per-owner receipts beside the selected config without loading credentials. `--find-media` performs an exact Kaltura name-and-owner lookup, while `--verify-uploads` checks every journaled entry ID against Kaltura. The reports show safe media fields and whether a token was recorded, but never print token values or process recordings.
 
 ## Running Tests
 
@@ -80,10 +99,6 @@ The tests depend on:
 
 - `test_courses.xlsx`
 - the folder structure configured by `[Paths].test_folder`
-
-Status verified locally on August 25, 2026:
-
-- 49 tests passed
 
 ## Build To Executable
 
@@ -101,7 +116,7 @@ Builds are platform-specific. The macOS arm64 build runs only on Apple silicon M
 
 The Actions artifact is unsigned and intended for controlled internal deployment. Confirm the workflow's commit matches the intended release and verify the ZIP against the recorded SHA-256 before extracting it. Windows SmartScreen or endpoint security may flag the executable until Authenticode signing is added.
 
-`config.ini`, `.env`, and the schedule workbook are intentionally not bundled. Start the executable with its working directory set to the folder containing those files.
+`config.ini`, `.env`, the upload journal, and the schedule workbook are intentionally not bundled. The release includes `Start-VideoSorter.ps1`, which starts the executable from its install directory and passes the config path explicitly. By default it uses `config.ini` beside the executable; pass `-ConfigPath` to select another file.
 
 ## Schedule spreadsheet expectations
 

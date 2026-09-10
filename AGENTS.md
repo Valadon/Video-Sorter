@@ -19,6 +19,9 @@ If those sources disagree, trust the code and tests over the older README langua
 - `data_types.py`: small domain model for courses, instructors, and recordings.
 - `format_parser.py`: filename parsers for supported recording systems.
 - `kaltura_uploader.py`: upload/auth flow, backed by `mock_kaltura_client.py`.
+- `upload_journal.py`: durable, per-owner upload-stage receipts used to prevent duplicate Kaltura entries.
+- `alert_digest.py`: one warning/error email digest per processing pass.
+- `runtime_guard.py`: stable config resolution, build identity, explicit environment loading, and the single-instance lock.
 - `file_reaper.py`: retention cleanup for old files and empty directories.
 - `unit_test.py`: behavioral test suite using `test_courses.xlsx` and a configured test folder.
 - `config-EXAMPLE.ini`: shape of the required local config file.
@@ -37,7 +40,7 @@ If those sources disagree, trust the code and tests over the older README langua
 ## Operational Guardrails
 
 - Do not commit `config.ini`, `.env`, logs, or real schedule exports.
-- Assume `config.ini` and `.env` are machine-specific. The app reads both at import/runtime from the repo root.
+- Assume `config.ini` and `.env` are machine-specific. Normal startup resolves the selected config first, then loads `.env` beside it after acquiring the single-instance lock.
 - Treat the spreadsheet schema as part of the app contract. Small header changes can break parsing.
 - Preserve filename compatibility unless a task explicitly allows changing ingest rules.
 - When editing docs or config examples, keep Windows operators in mind. The original workflow was clearly Windows-first even if development now happens elsewhere too.
