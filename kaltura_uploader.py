@@ -173,7 +173,12 @@ def _authoritative_upload_position(
     token = kaltura_client.uploadToken.get(upload_token_id)
     status = _status_number(token.status)
     uploaded_size = _uploaded_size(token)
-    if uploaded_size is None and allow_missing_as_zero and status == 0:
+    if (
+        uploaded_size is None
+        and token.uploadedFileSize is None
+        and allow_missing_as_zero
+        and status == 0
+    ):
         uploaded_size = 0
     elif uploaded_size is None:
         raise KalturaOutcomeUnknown(
@@ -252,6 +257,7 @@ def _upload_bytes_in_chunks(
     *,
     progress: Callable[[int, int], None] | None = None,
     chunk_size: int = UPLOAD_CHUNK_BYTES,
+    allow_pending_null_as_zero: bool = False,
 ):
     if chunk_size <= 0:
         raise ValueError('chunk_size must be positive')
@@ -276,7 +282,14 @@ def _upload_bytes_in_chunks(
             kaltura_client,
             receipt.upload_token_id,
             source_size,
-            allow_missing_as_zero=receipt.state == STATE_TOKEN_CREATED,
+            allow_missing_as_zero=(
+                receipt.state == STATE_TOKEN_CREATED
+                or (
+                    allow_pending_null_as_zero
+                    and receipt.confirmed_bytes == 0
+                    and receipt.entry_id is None
+                )
+            ),
         )
     except KalturaApiError as error:
         _hold_byte_stage(
@@ -489,6 +502,7 @@ def resume_upload_bytes_only(
         journal,
         source_sha256,
         progress=progress,
+        allow_pending_null_as_zero=True,
     )
 
 

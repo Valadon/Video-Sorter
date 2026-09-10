@@ -415,29 +415,109 @@ def test_explicit_resume_uses_authoritative_partial_offset_and_stops_at_bytes(
         journal.close()
 
 
-def test_explicit_resume_requires_reported_uploaded_size(tmp_path):
+def test_explicit_resume_treats_pending_literal_null_as_zero(tmp_path):
     source, source_hash, journal, client = prepare_chunk_receipt(
         tmp_path, state=STATE_BYTES_SUBMITTING
     )
     original_get = client.uploadToken.get
 
-    def missing_position(upload_token_id):
+    first_get = True
+
+    def missing_initial_position(upload_token_id):
+        nonlocal first_get
         token = original_get(upload_token_id)
-        token.uploadedFileSize = None
+        if first_get:
+            first_get = False
+            token.uploadedFileSize = None
         return token
 
-    client.uploadToken.get = missing_position
+    client.uploadToken.get = missing_initial_position
+    try:
+        receipt = resume_upload_bytes_only(
+            str(source),
+            'u0000001',
+            client,
+            journal,
+            source_hash,
+        )
+        assert receipt.state == STATE_BYTES_UPLOADED
+        assert client.uploadToken.chunk_calls[0][0:3] == (0, source.stat().st_size, False)
+    finally:
+        journal.close()
+
+
+def test_explicit_resume_rejects_partial_token_with_null_uploaded_size(tmp_path):
+    source, source_hash, journal, client = prepare_chunk_receipt(
+        tmp_path, state=STATE_BYTES_SUBMITTING
+    )
+    client.uploadToken.get = lambda _token_id: KalturaUploadToken(
+        id='token-existing',
+        status=1,
+        fileSize=source.stat().st_size,
+        uploadedFileSize=None,
+    )
     try:
         with pytest.raises(
             UploadNeedsManualReconciliation,
             match='did not report uploadedFileSize',
         ):
             resume_upload_bytes_only(
-                str(source),
-                'u0000001',
-                client,
-                journal,
-                source_hash,
+                str(source), 'u0000001', client, journal, source_hash
+            )
+        assert client.uploadToken.chunk_calls == []
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize('malformed_size', ['NaN', 'Infinity', 'not-a-number'])
+def test_explicit_resume_rejects_pending_token_with_malformed_uploaded_size(
+    tmp_path, malformed_size
+):
+    source, source_hash, journal, client = prepare_chunk_receipt(
+        tmp_path, state=STATE_BYTES_SUBMITTING
+    )
+    client.uploadToken.get = lambda _token_id: KalturaUploadToken(
+        id='token-existing',
+        status=0,
+        fileSize=source.stat().st_size,
+        uploadedFileSize=malformed_size,
+    )
+    try:
+        with pytest.raises(
+            UploadNeedsManualReconciliation,
+            match='did not report uploadedFileSize',
+        ):
+            resume_upload_bytes_only(
+                str(source), 'u0000001', client, journal, source_hash
+            )
+        assert client.uploadToken.chunk_calls == []
+    finally:
+        journal.close()
+
+
+def test_explicit_resume_rejects_pending_null_after_confirmed_progress(tmp_path):
+    source, source_hash, journal, client = prepare_chunk_receipt(
+        tmp_path, state=STATE_BYTES_SUBMITTING
+    )
+    journal.update(
+        source_hash,
+        'u0000001',
+        STATE_BYTES_SUBMITTING,
+        confirmed_bytes=4,
+    )
+    client.uploadToken.get = lambda _token_id: KalturaUploadToken(
+        id='token-existing',
+        status=0,
+        fileSize=source.stat().st_size,
+        uploadedFileSize=None,
+    )
+    try:
+        with pytest.raises(
+            UploadNeedsManualReconciliation,
+            match='did not report uploadedFileSize',
+        ):
+            resume_upload_bytes_only(
+                str(source), 'u0000001', client, journal, source_hash
             )
         assert client.uploadToken.chunk_calls == []
     finally:

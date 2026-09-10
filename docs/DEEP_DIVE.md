@@ -319,6 +319,8 @@ The prefix must be 8 to 64 hexadecimal characters and resolve to exactly one rec
 
 The recovery command reuses the recorded token and returns only after the receipt reaches `bytes_uploaded`. It never creates a token, media entry, or attachment. Only `bytes_submitting` receipts and `manual_reconcile` receipts explicitly marked as byte-stage ambiguity are eligible. States such as `entry_creating` and `attaching` remain blocked for manual reconciliation because retrying them could create duplicate media.
 
+For an explicit resume only, a PENDING token with a literal null uploaded byte count is treated as offset zero when the journal also has zero confirmed bytes; partial, malformed, or previously advanced receipts remain blocked.
+
 ## Retention / Reaper
 
 `file_reaper.py` recursively deletes files older than the cutoff and removes directories once they become empty.
