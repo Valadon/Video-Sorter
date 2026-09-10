@@ -1,10 +1,13 @@
 [CmdletBinding()]
 param(
-    [string]$InstallDirectory = $PSScriptRoot,
+    [string]$InstallDirectory,
     [string]$ConfigPath
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
+    $InstallDirectory = $PSScriptRoot
+}
 $resolvedInstallDirectory = (Resolve-Path -LiteralPath $InstallDirectory).Path
 $executable = Join-Path $resolvedInstallDirectory "video_sorter.exe"
 
